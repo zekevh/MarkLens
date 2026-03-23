@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         NavigationSplitView {
@@ -45,6 +46,13 @@ struct ContentView: View {
         }
         .toolbarBackground(.hidden, for: .windowToolbar)
         .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
+        .searchFocused($isSearchFocused)
+        .onChange(of: appState.isSearchFocused) { _, focused in
+            if focused {
+                isSearchFocused = true
+                appState.isSearchFocused = false
+            }
+        }
     }
 }
 

@@ -26,6 +26,7 @@ final class AppState: ObservableObject {
     @Published var documentText: String = ""
     @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
     @Published var searchText: String = ""
+    @Published var isSearchFocused: Bool = false
 
     private var saveWorkItem: DispatchWorkItem?
     var rootFolderURL: URL?
@@ -213,6 +214,11 @@ struct MarkLensApp: App {
                     .keyboardShortcut("o", modifiers: .command)
                 Button("Open Folder…") { appState.openFolderPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .textEditing) {
+                Button("Find…") { appState.isSearchFocused = true }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(appState.selectedFileURL == nil)
             }
         }
     }
