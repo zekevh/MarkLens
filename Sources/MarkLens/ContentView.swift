@@ -24,28 +24,27 @@ struct ContentView: View {
                         .ignoresSafeArea()
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: { appState.createFile() }) {
-                        Label("New Note", systemImage: "square.and.pencil")
-                    }
-                    .help("New Note (⌘N)")
-                    .disabled(appState.rootNodes.isEmpty)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: { appState.createFile() }) {
+                    Label("New Note", systemImage: "square.and.pencil")
                 }
+                .help("New Note (⌘N)")
+                .disabled(appState.rootNodes.isEmpty)
+            }
 
-                ToolbarItem(placement: .primaryAction) {
-                    if let url = appState.selectedFileURL {
-                        ShareLink(item: url) {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                        }
-                        .help("Share Note")
+            ToolbarItem(placement: .primaryAction) {
+                if let url = appState.selectedFileURL {
+                    ShareLink(item: url) {
+                        Label("Share", systemImage: "square.and.arrow.up")
                     }
+                    .help("Share Note")
                 }
             }
-            .toolbarBackground(.hidden, for: .windowToolbar)
-            .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
         }
         .toolbarBackground(.hidden, for: .windowToolbar)
+        .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
     }
 }
 
