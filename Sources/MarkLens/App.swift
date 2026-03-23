@@ -19,11 +19,13 @@ struct FileNode: Identifiable, Hashable {
 
 // MARK: - AppState
 
+@MainActor
 final class AppState: ObservableObject {
     @Published var rootNodes: [FileNode] = []
     @Published var selectedFileURL: URL? = nil
     @Published var documentText: String = ""
     @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
+    @Published var searchText: String = ""
 
     private var saveWorkItem: DispatchWorkItem?
     var rootFolderURL: URL?
@@ -166,11 +168,23 @@ final class AppState: ObservableObject {
 // MARK: - App Entry Point
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var appState: AppState?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // When launched as an SPM executable, macOS treats it as a background
-        // process. Force it into the foreground so the window becomes key.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
     }
 }
 
@@ -183,6 +197,7 @@ struct MarkLensApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .onAppear { appDelegate.appState = appState }
                 .frame(minWidth: 800, minHeight: 520)
         }
         .windowStyle(.titleBar)
@@ -199,7 +214,6 @@ struct MarkLensApp: App {
                 Button("Open Folder…") { appState.openFolderPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
             }
-            CommandGroup(replacing: .undoRedo) {}
         }
     }
 }

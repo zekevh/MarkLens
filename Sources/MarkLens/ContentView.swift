@@ -10,25 +10,42 @@ struct ContentView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
         } detail: {
-            if appState.selectedFileURL != nil {
-                MarkdownEditor(
-                    text: $appState.documentText,
-                    onTextChange: { appState.saveCurrentFile(text: $0) }
-                )
-                .id(appState.selectedFileURL)
-            } else {
-                EmptyEditorView()
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: { appState.createFile() }) {
-                    Label("New File", systemImage: "square.and.pencil")
+            Group {
+                if appState.selectedFileURL != nil {
+                    MarkdownEditor(
+                        text: $appState.documentText,
+                        searchText: appState.searchText,
+                        onTextChange: { appState.saveCurrentFile(text: $0) }
+                    )
+                    .id(appState.selectedFileURL)
+                    .ignoresSafeArea()
+                } else {
+                    EmptyEditorView()
+                        .ignoresSafeArea()
                 }
-                .help("New File (⌘N)")
-                .disabled(appState.rootNodes.isEmpty)
             }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { appState.createFile() }) {
+                        Label("New Note", systemImage: "square.and.pencil")
+                    }
+                    .help("New Note (⌘N)")
+                    .disabled(appState.rootNodes.isEmpty)
+                }
+
+                ToolbarItem(placement: .primaryAction) {
+                    if let url = appState.selectedFileURL {
+                        ShareLink(item: url) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                        }
+                        .help("Share Note")
+                    }
+                }
+            }
+            .toolbarBackground(.hidden, for: .windowToolbar)
+            .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
         }
+        .toolbarBackground(.hidden, for: .windowToolbar)
     }
 }
 

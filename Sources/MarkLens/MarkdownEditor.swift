@@ -1,6 +1,42 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Custom Attribute Keys
+
+extension NSAttributedString.Key {
+    static let markdownHR = NSAttributedString.Key("md.hr")
+}
+
+// MARK: - MarkdownLayoutManager
+// Used only to draw horizontal rule lines; table styling is handled via NSTextBlock.
+
+final class MarkdownLayoutManager: NSLayoutManager {
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let storage = textStorage else { return }
+        let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        storage.enumerateAttribute(.markdownHR, in: charRange, options: []) { val, rng, _ in
+            guard val != nil else { return }
+            let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
+            guard gr.length > 0 else { return }
+            let lineRect = self.lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
+                               .offsetBy(dx: origin.x, dy: origin.y)
+            let y = floor(lineRect.midY) + 0.5
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: lineRect.minX, y: y))
+            path.line(to: NSPoint(x: lineRect.maxX, y: y))
+            path.lineWidth = 1
+            NSColor.separatorColor.setStroke()
+            path.stroke()
+        }
+    }
+}
+
 // MARK: - MarkLensTextView
 
 private final class MarkLensTextView: NSTextView {
@@ -21,20 +57,28 @@ private final class MarkLensTextView: NSTextView {
 
 struct MarkdownEditor: NSViewRepresentable {
     @Binding var text: String
+    var searchText: String
     var onTextChange: (String) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = MarkLensTextView()
+        // Build TextKit stack with our custom layout manager
+        let storage   = NSTextStorage()
+        let layout    = MarkdownLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+
+        let textView = MarkLensTextView(frame: .zero, textContainer: container)
         configure(textView)
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
 
         if !text.isEmpty {
-            // isLoading prevents textDidChange from flagging hasUnsavedEdits
             context.coordinator.isLoading = true
             textView.string = text
             context.coordinator.isLoading = false
-            // Full synchronous highlight — overrides the debounced scan
             context.coordinator.fullScanWorkItem?.cancel()
             context.coordinator.applyFullHighlight(to: textView.textStorage!)
         }
@@ -51,19 +95,20 @@ struct MarkdownEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let textView = scroll.documentView as? NSTextView else { return }
-        // Never replace content while the user is editing — cursor would jump.
-        // File switches use .id(selectedFileURL) to recreate the view entirely,
-        // giving a fresh coordinator with hasUnsavedEdits = false.
-        guard !context.coordinator.hasUnsavedEdits else { return }
-        guard textView.string != text else { return }
 
-        context.coordinator.isLoading = true
-        textView.string = text
-        context.coordinator.isLoading = false
-        context.coordinator.fullScanWorkItem?.cancel()
-        if let storage = textView.textStorage {
-            context.coordinator.applyFullHighlight(to: storage)
+        // Update text content if changed from outside
+        if !context.coordinator.hasUnsavedEdits && textView.string != text {
+            context.coordinator.isLoading = true
+            textView.string = text
+            context.coordinator.isLoading = false
+            context.coordinator.fullScanWorkItem?.cancel()
+            if let storage = textView.textStorage {
+                context.coordinator.applyFullHighlight(to: storage)
+            }
         }
+
+        // Apply search highlights
+        context.coordinator.applySearchHighlights(to: textView, query: searchText)
     }
 
     func makeCoordinator() -> EditorCoordinator {
@@ -103,9 +148,37 @@ final class EditorCoordinator: NSObject {
     var hasUnsavedEdits = false
     var isLoading = false
     var fullScanWorkItem: DispatchWorkItem?
+    private var lastSearchQuery = ""
 
     init(onTextChange: @escaping (String) -> Void) {
         self.onTextChange = onTextChange
+    }
+
+    // MARK: Search highlighting
+
+    func applySearchHighlights(to textView: NSTextView, query: String) {
+        guard query != lastSearchQuery else { return }
+        lastSearchQuery = query
+
+        guard let layoutManager = textView.layoutManager, let storage = textView.textStorage else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+
+        // Always clear previous search highlights
+        layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+
+        guard !query.isEmpty else { return }
+
+        let content = storage.string as NSString
+        var searchRange = NSRange(location: 0, length: content.length)
+
+        while searchRange.location < content.length {
+            let foundRange = content.range(of: query, options: .caseInsensitive, range: searchRange)
+            if foundRange.location == NSNotFound { break }
+
+            layoutManager.addTemporaryAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.3), forCharacterRange: foundRange)
+            searchRange.location = NSMaxRange(foundRange)
+            searchRange.length = content.length - searchRange.location
+        }
     }
 
     // MARK: Full highlight (used on file load)
@@ -215,11 +288,11 @@ final class EditorCoordinator: NSObject {
             }
         }
 
-        // Horizontal rule
+        // Horizontal rule — hide the syntax, draw a line via MarkdownLayoutManager
         Patterns.horizontalRule.enumerateMatches(in: storage.string, range: range) { m, _, _ in
             guard let m else { return }
-            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: m.range)
-            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 8), range: m.range)
+            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: m.range)
+            storage.addAttribute(.markdownHR, value: true, range: m.range)
             storage.addAttribute(.paragraphStyle, value: Styles.hrParagraphStyle, range: m.range)
         }
     }
@@ -238,22 +311,75 @@ final class EditorCoordinator: NSObject {
 
     private func applyTables(to range: NSRange, storage: NSTextStorage) {
         let ns = storage.string as NSString
-        let bold = NSFontManager.shared.convert(Styles.bodyFont, toHaveTrait: .boldFontMask)
+        let boldTableFont = NSFontManager.shared.convert(Styles.tableFont, toHaveTrait: .boldFontMask)
+        let border     = NSColor.separatorColor.withAlphaComponent(0.45)
+        let bodyBorder = NSColor.separatorColor.withAlphaComponent(0.2)
 
         Patterns.tableSeparator.enumerateMatches(in: storage.string, options: [], range: range) { m, _, _ in
             guard let m else { return }
-            storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: m.range)
-            let sepStart = m.range.location
-            guard sepStart > 0 else { return }
-            let headerRange = ns.lineRange(for: NSRange(location: sepStart - 1, length: 0))
-            if headerRange.length > 0 { storage.addAttribute(.font, value: bold, range: headerRange) }
+            let sepRange = m.range
+
+            // Collapse the |---|---| separator row to near-zero height, invisible text
+            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: sepRange)
+            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 0.01), range: sepRange)
+            storage.addAttribute(.paragraphStyle, value: Styles.collapsedRowParagraphStyle, range: sepRange)
+
+            // ── Header row (line immediately before separator) ────────────
+            guard sepRange.location > 0 else { return }
+            let headerRange = ns.lineRange(for: NSRange(location: sepRange.location - 1, length: 0))
+            guard headerRange.length > 0 else { return }
+
+            let headerBlock = NSTextBlock()
+            headerBlock.backgroundColor = (NSColor(white: 1, alpha: 0.07))
+            // Top edge = table outer border
+            headerBlock.setBorderColor(border, for: .minY)
+            headerBlock.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .minY)
+            // Bottom edge = header/body divider (heavier)
+            headerBlock.setBorderColor(border, for: .maxY)
+            headerBlock.setWidth(1.5, type: .absoluteValueType, for: .border, edge: .maxY)
+            // Vertical padding so text doesn't sit flush against the border
+            headerBlock.setWidth(5, type: .absoluteValueType, for: .padding, edge: .minY)
+            headerBlock.setWidth(5, type: .absoluteValueType, for: .padding, edge: .maxY)
+
+            let headerPS = NSMutableParagraphStyle()
+            headerPS.textBlocks = [headerBlock]
+            storage.addAttribute(.font, value: boldTableFont, range: headerRange)
+            storage.addAttribute(.paragraphStyle, value: headerPS, range: headerRange)
+
+            // ── Body rows ─────────────────────────────────────────────────
+            var rowIndex = 0
+            var pos = NSMaxRange(sepRange)
+            while pos < storage.length {
+                let lineRange = ns.lineRange(for: NSRange(location: pos, length: 0))
+                let trimmed = ns.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("|") else { break }
+
+                let bodyBlock = NSTextBlock()
+                if rowIndex % 2 == 1 {
+                    bodyBlock.backgroundColor = (NSColor(white: 1, alpha: 0.04))
+                }
+                // Bottom border as row separator; last row closes the table box
+                bodyBlock.setBorderColor(bodyBorder, for: .maxY)
+                bodyBlock.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .maxY)
+                bodyBlock.setWidth(4, type: .absoluteValueType, for: .padding, edge: .minY)
+                bodyBlock.setWidth(4, type: .absoluteValueType, for: .padding, edge: .maxY)
+
+                let bodyPS = NSMutableParagraphStyle()
+                bodyPS.textBlocks = [bodyBlock]
+                storage.addAttribute(.font, value: Styles.tableFont, range: lineRange)
+                storage.addAttribute(.paragraphStyle, value: bodyPS, range: lineRange)
+
+                rowIndex += 1
+                pos = NSMaxRange(lineRange)
+            }
         }
 
+        // Style | as visible column dividers across all table rows
         Patterns.tableRow.enumerateMatches(in: storage.string, options: [], range: range) { m, _, _ in
             guard let m else { return }
             Patterns.pipe.enumerateMatches(in: storage.string, options: [], range: m.range) { pm, _, _ in
                 guard let pm else { return }
-                storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: pm.range)
+                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: pm.range)
             }
         }
     }
@@ -277,20 +403,16 @@ extension EditorCoordinator: NSTextStorageDelegate {
                      didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange,
                      changeInLength delta: Int) {
-        // Only react to character changes — attribute-only edits are from our
-        // own highlighting and must be ignored to prevent infinite recursion.
         guard editedMask.contains(.editedCharacters) else { return }
         let len = textStorage.length
         guard len > 0 else { return }
 
-        // Immediate: re-style the edited paragraph
         let paraRange = (textStorage.string as NSString).paragraphRange(for: editedRange)
         textStorage.beginEditing()
         applyBase(to: paraRange, storage: textStorage)
         applyInline(to: paraRange, storage: textStorage)
         textStorage.endEditing()
 
-        // Debounced: full-doc scan for fenced blocks and tables (expensive)
         fullScanWorkItem?.cancel()
         let item = DispatchWorkItem { [weak textStorage] in
             guard let ts = textStorage, ts.length > 0 else { return }
@@ -308,10 +430,11 @@ extension EditorCoordinator: NSTextStorageDelegate {
 // MARK: - Styles
 
 enum Styles {
-    static let bodyFont  = NSFont.systemFont(ofSize: 15, weight: .regular)
-    static let monoFont  = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    nonisolated(unsafe) static let bodyFont  = NSFont.systemFont(ofSize: 15, weight: .regular)
+    nonisolated(unsafe) static let monoFont  = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    nonisolated(unsafe) static let tableFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
 
-    static let baseAttributes: [NSAttributedString.Key: Any] = [
+    nonisolated(unsafe) static let baseAttributes: [NSAttributedString.Key: Any] = [
         .font: bodyFont,
         .foregroundColor: NSColor.labelColor,
         .paragraphStyle: defaultParagraphStyle
@@ -347,10 +470,24 @@ enum Styles {
     }
 
     static var hrParagraphStyle: NSParagraphStyle {
-        let ps = NSMutableParagraphStyle(); ps.paragraphSpacingBefore = 10; ps.paragraphSpacing = 10; return ps
+        let ps = NSMutableParagraphStyle()
+        ps.paragraphSpacingBefore = 10
+        ps.paragraphSpacing = 10
+        return ps
     }
 
-    static let syntaxColor   = NSColor.tertiaryLabelColor
+    /// Collapses the `|---|---|` separator row to near-zero height.
+    static var collapsedRowParagraphStyle: NSParagraphStyle {
+        let ps = NSMutableParagraphStyle()
+        ps.minimumLineHeight = 1
+        ps.maximumLineHeight = 1
+        ps.paragraphSpacing = 0
+        ps.paragraphSpacingBefore = 0
+        ps.lineSpacing = 0
+        return ps
+    }
+
+    static let syntaxColor    = NSColor.tertiaryLabelColor
     static let codeBackground = NSColor.quaternaryLabelColor
 }
 
