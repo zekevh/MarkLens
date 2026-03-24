@@ -13,7 +13,7 @@ struct ContentView: View {
         } detail: {
             Group {
                 if appState.selectedFileURL != nil {
-                    MarkdownEditor(
+                    NodeEditorView(
                         text: $appState.documentText,
                         searchText: appState.searchText,
                         onTextChange: { appState.saveCurrentFile(text: $0) }
@@ -45,13 +45,17 @@ struct ContentView: View {
             }
         }
         .toolbarBackground(.hidden, for: .windowToolbar)
-        .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
-        .searchFocused($isSearchFocused)
-        .onChange(of: appState.isSearchFocused) { _, focused in
-            if focused {
-                isSearchFocused = true
-                appState.isSearchFocused = false
-            }
+        .if(appState.selectedFileURL != nil) { view in
+            view
+                .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
+                .searchFocused($isSearchFocused)
+                .onChange(of: appState.isSearchFocused) { _, focused in
+                    guard focused else { return }
+                    Task { @MainActor in
+                        isSearchFocused = true
+                        appState.isSearchFocused = false
+                    }
+                }
         }
     }
 }
@@ -156,5 +160,14 @@ struct EmptyEditorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+    }
+}
+
+// MARK: - View Helpers
+
+private extension View {
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition { transform(self) } else { self }
     }
 }

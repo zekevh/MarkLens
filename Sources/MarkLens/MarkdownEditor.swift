@@ -143,7 +143,8 @@ struct MarkdownEditor: NSViewRepresentable {
 
 // MARK: - EditorCoordinator
 
-final class EditorCoordinator: NSObject {
+@MainActor
+class EditorCoordinator: NSObject {
     var onTextChange: (String) -> Void
     var hasUnsavedEdits = false
     var isLoading = false
@@ -398,7 +399,7 @@ extension EditorCoordinator: NSTextViewDelegate {
 
 // MARK: NSTextStorageDelegate
 
-extension EditorCoordinator: NSTextStorageDelegate {
+extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
     func textStorage(_ textStorage: NSTextStorage,
                      didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange,

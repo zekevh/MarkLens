@@ -182,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    @objc private func windowDidBecomeKey(_ notification: Notification) {
+    @objc @MainActor private func windowDidBecomeKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
