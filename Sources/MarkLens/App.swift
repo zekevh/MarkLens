@@ -29,7 +29,10 @@ final class AppState: ObservableObject {
     @Published var isSearchFocused: Bool = false
 
     private var saveWorkItem: DispatchWorkItem?
-    var rootFolderURL: URL?
+
+    var rootFolderURL: URL? {
+        didSet { UserDefaults.standard.set(rootFolderURL?.path, forKey: "lastRootFolderPath") }
+    }
 
     // MARK: File loading
 
@@ -37,6 +40,23 @@ final class AppState: ObservableObject {
         guard !url.hasDirectoryPath else { return }
         selectedFileURL = url
         documentText = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        UserDefaults.standard.set(url.path, forKey: "lastSelectedFilePath")
+    }
+
+    func restoreLastSession() {
+        if let folderPath = UserDefaults.standard.string(forKey: "lastRootFolderPath") {
+            let folderURL = URL(fileURLWithPath: folderPath)
+            guard FileManager.default.fileExists(atPath: folderPath) else { return }
+            rootFolderURL = folderURL
+            rootNodes = buildTree(at: folderURL)
+        }
+        if let filePath = UserDefaults.standard.string(forKey: "lastSelectedFilePath") {
+            let fileURL = URL(fileURLWithPath: filePath)
+            guard FileManager.default.fileExists(atPath: filePath) else { return }
+            loadFile(fileURL)
+        } else if let first = firstFile(in: rootNodes) {
+            loadFile(first.url)
+        }
     }
 
     func saveCurrentFile(text: String) {
@@ -198,7 +218,10 @@ struct MarkLensApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .onAppear { appDelegate.appState = appState }
+                .onAppear {
+                    appDelegate.appState = appState
+                    appState.restoreLastSession()
+                }
                 .frame(minWidth: 800, minHeight: 520)
         }
         .windowStyle(.titleBar)
