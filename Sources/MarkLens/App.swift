@@ -81,6 +81,7 @@ final class AppState: ObservableObject {
     @Published var documentText: String = ""
     @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
     @Published var recentURLs: [URL] = []
+    @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
 
@@ -359,6 +360,12 @@ struct MarkLensApp: App {
                 Button("Close Folder") { appState.closeFolder() }
                     .keyboardShortcut("w", modifiers: [.command, .shift])
                     .disabled(appState.rootNodes.isEmpty)
+            }
+            CommandGroup(replacing: .toolbar) {
+                Button(appState.sidebarVisibility == .all ? "Hide Sidebar" : "Show Sidebar") {
+                    appState.sidebarVisibility = appState.sidebarVisibility == .all ? .detailOnly : .all
+                }
+                .keyboardShortcut("s", modifiers: [.command, .control])
             }
             CommandGroup(after: .textEditing) {
                 Button("Find…") { appState.isSearchFocused = true }

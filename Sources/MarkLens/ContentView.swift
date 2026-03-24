@@ -5,9 +5,8 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var isSearchFocused: Bool
-
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $appState.sidebarVisibility) {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
         } detail: {
