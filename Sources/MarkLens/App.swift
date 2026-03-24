@@ -62,11 +62,18 @@ final class AppState: ObservableObject {
     func saveCurrentFile(text: String) {
         guard let url = selectedFileURL else { return }
         saveWorkItem?.cancel()
-        let item = DispatchWorkItem {
+        let item = DispatchWorkItem { [weak self] in
             try? text.write(to: url, atomically: true, encoding: .utf8)
+            self?.saveWorkItem = nil
         }
         saveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+    }
+
+    func flushPendingSave() {
+        saveWorkItem?.perform()
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
     }
 
     // MARK: New file
@@ -200,6 +207,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeKeyNotification,
             object: nil
         )
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Flush any pending debounced save before quitting so no edits are lost
+        appState?.flushPendingSave()
+        return .terminateNow
     }
 
     @objc @MainActor private func windowDidBecomeKey(_ notification: Notification) {

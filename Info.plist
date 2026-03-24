@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.marklens.app</string>
+    <string>io.zvh.marklens</string>
     <key>CFBundleName</key>
     <string>MarkLens</string>
     <key>CFBundleDisplayName</key>
@@ -23,6 +23,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>26.0</string>
 </dict>
 </plist>
