@@ -94,12 +94,14 @@ final class BlocksManager: ObservableObject {
         let newID    = newBlock.id
 
         um?.registerUndo(withTarget: self) { mgr in
-            guard let ni = mgr.blocks.firstIndex(where: { $0.id == newID }) else { return }
-            mgr.blocks.remove(at: ni)
-            if let si = mgr.blocks.firstIndex(where: { $0.id == sourceID }) {
-                mgr.blocks[si].content = originalContent
+            MainActor.assumeIsolated {
+                guard let ni = mgr.blocks.firstIndex(where: { $0.id == newID }) else { return }
+                mgr.blocks.remove(at: ni)
+                if let si = mgr.blocks.firstIndex(where: { $0.id == sourceID }) {
+                    mgr.blocks[si].content = originalContent
+                }
+                mgr.registry.focus(sourceID, at: .position(loc))
             }
-            mgr.registry.focus(sourceID, at: .position(loc))
         }
         um?.setActionName("Split Block")
 
@@ -120,11 +122,13 @@ final class BlocksManager: ObservableObject {
         let junctionPos         = originalPrevContent.count + (originalPrevContent.isEmpty ? 0 : 1)
 
         um?.registerUndo(withTarget: self) { mgr in
-            guard let pi = mgr.blocks.firstIndex(where: { $0.id == prevID }) else { return }
-            mgr.blocks[pi].content = originalPrevContent
-            let restored = MarkdownBlock(id: currentID, content: trailing)
-            mgr.blocks.insert(restored, at: pi + 1)
-            mgr.registry.focus(currentID, at: .start)
+            MainActor.assumeIsolated {
+                guard let pi = mgr.blocks.firstIndex(where: { $0.id == prevID }) else { return }
+                mgr.blocks[pi].content = originalPrevContent
+                let restored = MarkdownBlock(id: currentID, content: trailing)
+                mgr.blocks.insert(restored, at: pi + 1)
+                mgr.registry.focus(currentID, at: .start)
+            }
         }
         um?.setActionName("Merge Blocks")
 
@@ -147,7 +151,9 @@ final class BlocksManager: ObservableObject {
         let undoTo   = to > from ? from   : from + 1
 
         um?.registerUndo(withTarget: self) { mgr in
-            mgr.blocks.move(fromOffsets: IndexSet(integer: undoFrom), toOffset: undoTo)
+            MainActor.assumeIsolated {
+                mgr.blocks.move(fromOffsets: IndexSet(integer: undoFrom), toOffset: undoTo)
+            }
         }
         um?.setActionName("Move Block")
 
