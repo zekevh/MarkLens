@@ -391,12 +391,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        let url = URL(fileURLWithPath: filename)
-        guard FileManager.default.fileExists(atPath: filename) else { return false }
+        open(URL(fileURLWithPath: filename))
+        return true
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        filenames.forEach { open(URL(fileURLWithPath: $0)) }
+    }
+
+    @MainActor private func open(_ url: URL) {
+        guard !url.hasDirectoryPath,
+              FileManager.default.fileExists(atPath: url.path) else { return }
         appState?.rootFolderURL = nil
         appState?.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
         appState?.loadFile(url)
-        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
