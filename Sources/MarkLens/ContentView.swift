@@ -44,6 +44,14 @@ struct ContentView: View {
             }
         }
         .toolbarBackground(.hidden, for: .windowToolbar)
+        .alert("Error", isPresented: Binding(
+            get: { appState.errorMessage != nil },
+            set: { if !$0 { appState.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { appState.errorMessage = nil }
+        } message: {
+            Text(appState.errorMessage ?? "")
+        }
         .if(appState.selectedFileURL != nil) { view in
             view
                 .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")

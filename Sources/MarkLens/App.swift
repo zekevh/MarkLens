@@ -84,6 +84,7 @@ final class AppState: ObservableObject {
     @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
+    @Published var errorMessage: String? = nil
 
     private var saveWorkItem: DispatchWorkItem?
     private let fileWatcher = FileWatcher()
@@ -96,8 +97,13 @@ final class AppState: ObservableObject {
 
     func loadFile(_ url: URL) {
         guard !url.hasDirectoryPath else { return }
+        do {
+            documentText = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            errorMessage = "Could not open \"\(url.lastPathComponent)\": \(error.localizedDescription)"
+            return
+        }
         selectedFileURL = url
-        documentText = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         UserDefaults.standard.set(url.path, forKey: "lastSelectedFilePath")
         fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
         recordRecent(url)
@@ -115,9 +121,12 @@ final class AppState: ObservableObject {
     private func reloadIfChangedOnDisk() {
         guard let url = selectedFileURL else { return }
         guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
-        // Ignore the notification that fires right after our own save
         guard onDisk != documentText else { return }
         documentText = onDisk
+    }
+
+    private func present(_ error: Error, context: String) {
+        errorMessage = "\(context): \(error.localizedDescription)"
     }
 
     func restoreLastSession() {
@@ -143,10 +152,20 @@ final class AppState: ObservableObject {
 
     func saveCurrentFile(text: String) {
         guard let url = selectedFileURL else { return }
+        guard FileManager.default.isWritableFile(atPath: url.path) else {
+            errorMessage = "Cannot save \"\(url.lastPathComponent)\": file is read-only."
+            return
+        }
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
-            try? text.write(to: url, atomically: true, encoding: .utf8)
-            self?.saveWorkItem = nil
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                DispatchQueue.main.async {
+                    self?.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
+                }
+            }
+            DispatchQueue.main.async { self?.saveWorkItem = nil }
         }
         saveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
@@ -185,7 +204,10 @@ final class AppState: ObservableObject {
             url = dir.appendingPathComponent("Untitled \(counter).md")
             counter += 1
         }
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            errorMessage = "Could not create \"\(url.lastPathComponent)\". Check folder permissions."
+            return
+        }
         if let folder = rootFolderURL {
             rootNodes = buildTree(at: folder)
         } else {
@@ -272,7 +294,12 @@ final class AppState: ObservableObject {
     }
 
     func deleteFile(_ url: URL) {
-        try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            present(error, context: "Could not move \"\(url.lastPathComponent)\" to Trash")
+            return
+        }
         if selectedFileURL == url { selectedFileURL = nil; documentText = "" }
         if let folder = rootFolderURL {
             rootNodes = buildTree(at: folder)
