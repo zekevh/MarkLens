@@ -375,7 +375,9 @@ struct BlockEditorView: NSViewRepresentable {
             let before = String(str.prefix(loc))
             let after  = String(str.suffix(str.count - loc))
             coord.isLoading = true
+            tv.undoManager?.disableUndoRegistration()
             tv.string = before
+            tv.undoManager?.enableUndoRegistration()
             coord.isLoading = false
             coord.onTextChange(before)
             coord.updateHeight(for: tv)
@@ -392,7 +394,9 @@ struct BlockEditorView: NSViewRepresentable {
 
         if !content.isEmpty {
             context.coordinator.isLoading = true
+            textView.undoManager?.disableUndoRegistration()
             textView.string = content
+            textView.undoManager?.enableUndoRegistration()
             context.coordinator.isLoading = false
             context.coordinator.applyFullHighlight(to: textView.textStorage!)
         }
@@ -423,7 +427,9 @@ struct BlockEditorView: NSViewRepresentable {
         // Sync external content changes (e.g. merge appended to this block)
         if textView.string != content {
             context.coordinator.isLoading = true
+            textView.undoManager?.disableUndoRegistration()
             textView.string = content
+            textView.undoManager?.enableUndoRegistration()
             context.coordinator.isLoading = false
             if let storage = textView.textStorage {
                 context.coordinator.applyFullHighlight(to: storage)
