@@ -570,6 +570,46 @@ private final class BlockNSTextView: NSTextView {
     var onNavigatePrevious: ((CursorPlacement) -> Void)?
     var onNavigateNext:     ((CursorPlacement) -> Void)?
 
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if toggleTaskCheckboxIfHit(at: point) { return }
+        super.mouseDown(with: event)
+    }
+
+    private func toggleTaskCheckboxIfHit(at point: NSPoint) -> Bool {
+        guard let lm = layoutManager, let tc = textContainer else { return false }
+        var fraction: CGFloat = 0
+        let glyphIndex = lm.glyphIndex(for: point, in: tc, fractionOfDistanceThroughGlyph: &fraction)
+        guard glyphIndex < lm.numberOfGlyphs else { return false }
+        let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
+
+        let ns = string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: charIndex, length: 0))
+        let lineStr = ns.substring(with: lineRange)
+
+        guard let m = Patterns.taskListItem.firstMatch(
+            in: lineStr,
+            range: NSRange(location: 0, length: (lineStr as NSString).length)
+        ) else { return false }
+
+        // Map checkbox range from line-local to full-string coordinates
+        let localCheckbox = m.range(at: 2)
+        let checkboxRange = NSRange(location: lineRange.location + localCheckbox.location,
+                                    length: localCheckbox.length)
+
+        // Only toggle if the click landed between the bullet and the end of the checkbox
+        guard charIndex >= lineRange.location,
+              charIndex <= checkboxRange.location + checkboxRange.length else { return false }
+
+        let current = ns.substring(with: checkboxRange)
+        let replacement = current.lowercased() == "[x]" ? "[ ]" : "[x]"
+
+        guard shouldChangeText(in: checkboxRange, replacementString: replacement) else { return false }
+        replaceCharacters(in: checkboxRange, with: replacement)
+        didChangeText()
+        return true
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let ch = event.charactersIgnoringModifiers?.lowercased()

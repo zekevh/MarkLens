@@ -4,7 +4,8 @@ import AppKit
 // MARK: - Custom Attribute Keys
 
 extension NSAttributedString.Key {
-    static let markdownHR = NSAttributedString.Key("md.hr")
+    static let markdownHR       = NSAttributedString.Key("md.hr")
+    static let markdownCheckbox = NSAttributedString.Key("md.checkbox") // Bool: true = checked
 }
 
 // MARK: - MarkdownLayoutManager
@@ -33,6 +34,40 @@ final class MarkdownLayoutManager: NSLayoutManager {
             path.lineWidth = 1
             NSColor.separatorColor.setStroke()
             path.stroke()
+        }
+
+        storage.enumerateAttribute(.markdownCheckbox, in: charRange, options: []) { val, rng, _ in
+            guard let isChecked = val as? Bool else { return }
+            let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
+            guard gr.length > 0 else { return }
+            let lineRect    = self.lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
+                                  .offsetBy(dx: origin.x, dy: origin.y)
+            let glyphOffset = self.location(forGlyphAt: gr.location)
+            let side: CGFloat = 13
+            let squareRect = CGRect(
+                x: lineRect.minX + glyphOffset.x,
+                y: lineRect.midY - side / 2,
+                width: side, height: side
+            ).insetBy(dx: 0.5, dy: 0.5)
+            let box = NSBezierPath(roundedRect: squareRect, xRadius: 2.5, yRadius: 2.5)
+            box.lineWidth = 1.5
+            NSColor.secondaryLabelColor.setStroke()
+            box.stroke()
+
+            if isChecked {
+                let symConfig = NSImage.SymbolConfiguration(pointSize: 8.5, weight: .semibold)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor]))
+                if let img = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
+                                 .withSymbolConfiguration(symConfig) {
+                    let s = img.size
+                    let drawRect = CGRect(
+                        x: squareRect.midX - s.width  / 2,
+                        y: squareRect.midY - s.height / 2,
+                        width: s.width, height: s.height
+                    )
+                    img.draw(in: drawRect)
+                }
+            }
         }
     }
 }
@@ -171,6 +206,24 @@ class EditorCoordinator: NSObject {
         Patterns.listItem.enumerateMatches(in: storage.string, range: range) { m, _, _ in
             guard let m else { return }
             storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: m.range(at: 1))
+        }
+
+        // Task list checkboxes — hide [ ]/[x] text and draw a square via MarkdownLayoutManager
+        Patterns.taskListItem.enumerateMatches(in: storage.string, range: range) { m, _, _ in
+            guard let m else { return }
+            let checkboxRange = m.range(at: 2)
+            let contentRange  = m.range(at: 4)
+            let isChecked = checkboxRange.length > 0 &&
+                            ns.substring(with: checkboxRange).lowercased() == "[x]"
+            if checkboxRange.length > 0 {
+                storage.addAttribute(.foregroundColor,    value: NSColor.clear, range: checkboxRange)
+                storage.addAttribute(.markdownCheckbox,   value: isChecked,     range: checkboxRange)
+            }
+            if isChecked && contentRange.length > 0 {
+                storage.addAttribute(.foregroundColor,    value: NSColor.tertiaryLabelColor,       range: contentRange)
+                storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: contentRange)
+                storage.addAttribute(.strikethroughColor, value: NSColor.secondaryLabelColor,      range: contentRange)
+            }
         }
 
         // Links
@@ -410,7 +463,7 @@ enum Styles {
 
 // MARK: - Patterns
 
-private enum Patterns {
+enum Patterns {
     static let heading       = try! NSRegularExpression(pattern: #"^(#{1,6} )(.*)"#, options: .anchorsMatchLines)
     static let bold          = try! NSRegularExpression(pattern: #"(\*\*|__)(?!\s)(.+?)(?<!\s)\1"#)
     static let italic        = try! NSRegularExpression(pattern: #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)|(?<!_)_(?!_)(.+?)(?<!_)_(?!_)"#)
@@ -419,6 +472,7 @@ private enum Patterns {
     static let fencedCode    = try! NSRegularExpression(pattern: #"^(`{3,}[^\n]*\n)([\s\S]*?)(^`{3,}[ \t]*$)"#, options: .anchorsMatchLines)
     static let blockquote    = try! NSRegularExpression(pattern: #"^(>[ \t]?)(.*)"#, options: .anchorsMatchLines)
     static let listItem      = try! NSRegularExpression(pattern: #"^([-\*][ \t])(.*)"#, options: .anchorsMatchLines)
+    static let taskListItem  = try! NSRegularExpression(pattern: #"^([-*][ \t])(\[[ xX]\])([ \t])(.*)"#, options: .anchorsMatchLines)
     static let link          = try! NSRegularExpression(pattern: #"(\[)([^\]\n]+)(\]\()([^\)\n]+)(\))"#)
     static let horizontalRule = try! NSRegularExpression(pattern: #"^(\-{3,}|\*{3,}|_{3,})[ \t]*$"#, options: .anchorsMatchLines)
     static let tableSeparator = try! NSRegularExpression(pattern: #"^\|[-:| \t]+$"#, options: .anchorsMatchLines)
