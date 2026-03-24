@@ -64,6 +64,109 @@ final class BlockRegistry: ObservableObject {
     }
 }
 
+// MARK: - BlocksManager
+// Owns the blocks array and routes every structural mutation through the window's
+// UndoManager so Cmd+Z interleaves block operations with within-block typing.
+
+@MainActor
+final class BlocksManager: ObservableObject {
+    @Published var blocks: [MarkdownBlock] = []
+    let registry = BlockRegistry()
+
+    // Injected from SwiftUI environment — same instance NSTextView uses for within-block undo.
+    var undoManager: UndoManager?
+
+    func load(from text: String) {
+        let parsed = parseMarkdownBlocks(text)
+        blocks = parsed.isEmpty ? [MarkdownBlock(content: "")] : parsed
+    }
+
+    // MARK: Split (Enter)
+
+    func splitBlock(id: UUID, originalContent: String, at loc: Int) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
+        // Capture undo manager before mutating so the closure never touches NSApp.
+        let um = undoManager
+        let before = String(originalContent.prefix(loc))
+        let after  = String(originalContent.suffix(originalContent.count - loc))
+        let newBlock = MarkdownBlock(content: after)
+        let sourceID = id
+        let newID    = newBlock.id
+
+        um?.registerUndo(withTarget: self) { mgr in
+            guard let ni = mgr.blocks.firstIndex(where: { $0.id == newID }) else { return }
+            mgr.blocks.remove(at: ni)
+            if let si = mgr.blocks.firstIndex(where: { $0.id == sourceID }) {
+                mgr.blocks[si].content = originalContent
+            }
+            mgr.registry.focus(sourceID, at: .position(loc))
+        }
+        um?.setActionName("Split Block")
+
+        blocks[idx].content = before
+        blocks.insert(newBlock, at: idx + 1)
+        registry.focus(newID, at: .start)
+    }
+
+    // MARK: Merge (Backspace at block start)
+
+    func mergeWithPrevious(_ id: UUID, trailing: String) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx > 0 else { return }
+        let um = undoManager
+        let prevIdx             = idx - 1
+        let prevID              = blocks[prevIdx].id
+        let originalPrevContent = blocks[prevIdx].content
+        let currentID           = blocks[idx].id
+        let junctionPos         = originalPrevContent.count + (originalPrevContent.isEmpty ? 0 : 1)
+
+        um?.registerUndo(withTarget: self) { mgr in
+            guard let pi = mgr.blocks.firstIndex(where: { $0.id == prevID }) else { return }
+            mgr.blocks[pi].content = originalPrevContent
+            let restored = MarkdownBlock(id: currentID, content: trailing)
+            mgr.blocks.insert(restored, at: pi + 1)
+            mgr.registry.focus(currentID, at: .start)
+        }
+        um?.setActionName("Merge Blocks")
+
+        if !trailing.isEmpty {
+            let sep = blocks[prevIdx].content.isEmpty ? "" : "\n"
+            blocks[prevIdx].content += sep + trailing
+        }
+        blocks.remove(at: idx)
+        registry.focus(prevID, at: .position(junctionPos))
+    }
+
+    // MARK: Move (drag reorder)
+
+    func moveBlock(from: Int, to: Int) {
+        // After move(fromOffsets:[f], toOffset:t):
+        //   t > f  →  element lands at t-1   →  undo: from=t-1, to=f
+        //   t <= f →  element lands at t     →  undo: from=t,   to=f+1
+        let um = undoManager
+        let undoFrom = to > from ? to - 1 : to
+        let undoTo   = to > from ? from   : from + 1
+
+        um?.registerUndo(withTarget: self) { mgr in
+            mgr.blocks.move(fromOffsets: IndexSet(integer: undoFrom), toOffset: undoTo)
+        }
+        um?.setActionName("Move Block")
+
+        blocks.move(fromOffsets: IndexSet(integer: from), toOffset: to)
+    }
+
+    // MARK: Navigation (no undo needed)
+
+    func navigatePrevious(from id: UUID, placement: CursorPlacement) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx > 0 else { return }
+        registry.focus(blocks[idx - 1].id, at: placement)
+    }
+
+    func navigateNext(from id: UUID, placement: CursorPlacement) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx < blocks.count - 1 else { return }
+        registry.focus(blocks[idx + 1].id, at: placement)
+    }
+}
+
 // MARK: - NodeEditorView
 
 struct NodeEditorView: View {
@@ -71,37 +174,36 @@ struct NodeEditorView: View {
     var searchText: String
     var onTextChange: (String) -> Void
 
-    @State private var blocks: [MarkdownBlock] = []
+    @StateObject private var manager = BlocksManager()
+    @Environment(\.undoManager) private var undoManager
     @State private var dropTargetID: UUID? = nil
     @State private var debugBlocks = false
-    @StateObject private var registry = BlockRegistry()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array($blocks.enumerated()), id: \.element.id) { index, $block in
+                ForEach(Array($manager.blocks.enumerated()), id: \.element.id) { index, $block in
                     BlockRowView(
                         block: $block,
                         index: index,
                         searchText: searchText,
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
-                        registry: registry,
-                        onInsertAfter: { newContent in insertBlock(after: block.id, content: newContent) },
-                        onMergeWithPrevious: { trailing in mergeWithPrevious(block.id, trailing: trailing) },
-                        onNavigatePrevious: { placement in navigatePrevious(from: block.id, placement: placement) },
-                        onNavigateNext:     { placement in navigateNext(from: block.id, placement: placement) }
+                        registry: manager.registry,
+                        onSplitBlock:        { orig, loc in manager.splitBlock(id: block.id, originalContent: orig, at: loc) },
+                        onMergeWithPrevious: { trailing   in manager.mergeWithPrevious(block.id, trailing: trailing) },
+                        onNavigatePrevious:  { placement  in manager.navigatePrevious(from: block.id, placement: placement) },
+                        onNavigateNext:      { placement  in manager.navigateNext(from: block.id, placement: placement) }
                     )
                     .dropDestination(for: String.self) { items, _ in
                         guard let idString = items.first,
                               let sourceID = UUID(uuidString: idString),
                               sourceID != block.id,
-                              let from = blocks.firstIndex(where: { $0.id == sourceID }),
-                              let to   = blocks.firstIndex(where: { $0.id == block.id })
+                              let from = manager.blocks.firstIndex(where: { $0.id == sourceID }),
+                              let to   = manager.blocks.firstIndex(where: { $0.id == block.id })
                         else { return false }
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            blocks.move(fromOffsets: IndexSet(integer: from),
-                                        toOffset: to > from ? to + 1 : to)
+                            manager.moveBlock(from: from, to: to > from ? to + 1 : to)
                         }
                         return true
                     } isTargeted: { targeted in
@@ -127,45 +229,19 @@ struct NodeEditorView: View {
             }
         }
         .onAppear {
-            let parsed = parseMarkdownBlocks(text)
-            blocks = parsed.isEmpty ? [MarkdownBlock(content: "")] : parsed
+            manager.undoManager = undoManager
+            manager.load(from: text)
         }
-        .onChange(of: blocks) { _, newBlocks in
+        .onChange(of: undoManager) { _, um in
+            manager.undoManager = um
+        }
+        .onChange(of: manager.blocks) { _, newBlocks in
             // Only write to disk — don't mutate the binding mid-update
             // (documentText stays stale while editing; file switch via .id() re-parses)
             let serialized = serializeMarkdownBlocks(newBlocks)
             guard serialized != text else { return }
             onTextChange(serialized)
         }
-    }
-
-    private func insertBlock(after id: UUID, content: String) {
-        guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
-        let newBlock = MarkdownBlock(content: content)
-        blocks.insert(newBlock, at: idx + 1)
-        registry.focus(newBlock.id, at: .start)
-    }
-
-    private func mergeWithPrevious(_ id: UUID, trailing: String) {
-        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx > 0 else { return }
-        let prevID = blocks[idx - 1].id
-        let junctionPos = blocks[idx - 1].content.count + (blocks[idx - 1].content.isEmpty ? 0 : 1)
-        if !trailing.isEmpty {
-            let sep = blocks[idx - 1].content.isEmpty ? "" : "\n"
-            blocks[idx - 1].content += sep + trailing
-        }
-        blocks.remove(at: idx)
-        registry.focus(prevID, at: .position(junctionPos))
-    }
-
-    private func navigatePrevious(from id: UUID, placement: CursorPlacement) {
-        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx > 0 else { return }
-        registry.focus(blocks[idx - 1].id, at: placement)
-    }
-
-    private func navigateNext(from id: UUID, placement: CursorPlacement) {
-        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx < blocks.count - 1 else { return }
-        registry.focus(blocks[idx + 1].id, at: placement)
     }
 }
 
@@ -210,7 +286,7 @@ struct BlockRowView: View {
     var isDropTarget: Bool
     var debugBlocks: Bool
     var registry: BlockRegistry
-    var onInsertAfter: (String) -> Void
+    var onSplitBlock: (String, Int) -> Void   // (originalContent, cursorLocation)
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
@@ -237,7 +313,7 @@ struct BlockRowView: View {
                 searchText: searchText,
                 registry: registry,
                 onHeightChange: { h in height = h },
-                onInsertAfter: onInsertAfter,
+                onSplitBlock: onSplitBlock,
                 onMergeWithPrevious: onMergeWithPrevious,
                 onNavigatePrevious: onNavigatePrevious,
                 onNavigateNext: onNavigateNext
@@ -345,7 +421,7 @@ struct BlockEditorView: NSViewRepresentable {
     var searchText: String
     var registry: BlockRegistry
     var onHeightChange: (CGFloat) -> Void
-    var onInsertAfter: (String) -> Void
+    var onSplitBlock: (String, Int) -> Void   // (originalContent, cursorLocation)
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
@@ -370,10 +446,10 @@ struct BlockEditorView: NSViewRepresentable {
             guard !tv.string.hasPrefix("```"), !tv.string.hasPrefix("|") else {
                 tv.insertNewline(nil); return
             }
-            let loc = tv.selectedRange().location
-            let str = tv.string
-            let before = String(str.prefix(loc))
-            let after  = String(str.suffix(str.count - loc))
+            let loc             = tv.selectedRange().location
+            let originalContent = tv.string
+            let before          = String(originalContent.prefix(loc))
+            // Immediately truncate the text view so it doesn't flash the full content
             coord.isLoading = true
             tv.undoManager?.disableUndoRegistration()
             tv.string = before
@@ -381,7 +457,8 @@ struct BlockEditorView: NSViewRepresentable {
             coord.isLoading = false
             coord.onTextChange(before)
             coord.updateHeight(for: tv)
-            coord.onInsertAfter(after)
+            // Block-level split is registered with the app UndoManager
+            coord.onSplitBlock(originalContent, loc)
         }
         textView.onBackspaceAtStart = { [weak coord, weak textView] in
             guard let coord, let tv = textView else { return }
@@ -419,7 +496,7 @@ struct BlockEditorView: NSViewRepresentable {
         // Refresh callbacks so they never go stale across re-renders
         context.coordinator.onTextChange        = { [self] t in content = t }
         context.coordinator.onHeightChange      = onHeightChange
-        context.coordinator.onInsertAfter       = onInsertAfter
+        context.coordinator.onSplitBlock        = onSplitBlock
         context.coordinator.onMergeWithPrevious = onMergeWithPrevious
         context.coordinator.onNavigatePrevious  = onNavigatePrevious
         context.coordinator.onNavigateNext      = onNavigateNext
@@ -445,7 +522,7 @@ struct BlockEditorView: NSViewRepresentable {
         BlockEditorCoordinator(
             onTextChange:        { [self] t in content = t },
             onHeightChange:      onHeightChange,
-            onInsertAfter:       onInsertAfter,
+            onSplitBlock:        onSplitBlock,
             onMergeWithPrevious: onMergeWithPrevious,
             onNavigatePrevious:  onNavigatePrevious,
             onNavigateNext:      onNavigateNext
@@ -552,7 +629,7 @@ final class BlockEditorCoordinator: NSObject {
 
     var onTextChange:        (String) -> Void
     var onHeightChange:      (CGFloat) -> Void
-    var onInsertAfter:       (String) -> Void
+    var onSplitBlock:        (String, Int) -> Void   // (originalContent, cursorLocation)
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious:  (CursorPlacement) -> Void
     var onNavigateNext:      (CursorPlacement) -> Void
@@ -561,15 +638,15 @@ final class BlockEditorCoordinator: NSObject {
     init(
         onTextChange:        @escaping (String) -> Void,
         onHeightChange:      @escaping (CGFloat) -> Void,
-        onInsertAfter:       @escaping (String) -> Void,
+        onSplitBlock:        @escaping (String, Int) -> Void,
         onMergeWithPrevious: @escaping (String) -> Void,
         onNavigatePrevious:  @escaping (CursorPlacement) -> Void,
         onNavigateNext:      @escaping (CursorPlacement) -> Void
     ) {
-        self.highlighter        = EditorCoordinator(onTextChange: { _ in })
+        self.highlighter         = EditorCoordinator(onTextChange: { _ in })
         self.onTextChange        = onTextChange
         self.onHeightChange      = onHeightChange
-        self.onInsertAfter       = onInsertAfter
+        self.onSplitBlock        = onSplitBlock
         self.onMergeWithPrevious = onMergeWithPrevious
         self.onNavigatePrevious  = onNavigatePrevious
         self.onNavigateNext      = onNavigateNext

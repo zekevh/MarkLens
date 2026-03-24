@@ -10,7 +10,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MarkLens",
-            path: "Sources/MarkLens"
+            path: "Sources/MarkLens",
+            resources: [.process("Assets.xcassets")]
         )
     ]
 )
