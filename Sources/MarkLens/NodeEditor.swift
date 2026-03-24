@@ -44,7 +44,8 @@ struct NodeEditorView: View {
             }
             .padding(.leading, 8)
             .padding(.trailing, 48)
-            .padding(.vertical, 40)
+            .padding(.top, 72)
+            .padding(.bottom, 40)
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
