@@ -11,16 +11,19 @@ struct NodeEditorView: View {
     @State private var blocks: [MarkdownBlock] = []
     @State private var hoveredID: UUID? = nil
     @State private var dropTargetID: UUID? = nil
+    @State private var debugBlocks = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach($blocks) { $block in
+                ForEach(Array($blocks.enumerated()), id: \.element.id) { index, $block in
                     BlockRowView(
                         block: $block,
+                        index: index,
                         searchText: searchText,
                         isHovered: hoveredID == block.id,
                         isDropTarget: dropTargetID == block.id,
+                        debugBlocks: debugBlocks,
                         onHover: { hovered in hoveredID = hovered ? block.id : nil },
                         onInsertAfter: { newContent in insertBlock(after: block.id, content: newContent) },
                         onMergeWithPrevious: { trailing in mergeWithPrevious(block.id, trailing: trailing) }
@@ -46,6 +49,17 @@ struct NodeEditorView: View {
             .padding(.vertical, 40)
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .onAppear {
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if flags == [.command, .shift],
+                   event.charactersIgnoringModifiers?.lowercased() == "d" {
+                    debugBlocks.toggle()
+                    return nil
+                }
+                return event
+            }
+        }
         .onAppear {
             let parsed = parseMarkdownBlocks(text)
             blocks = parsed.isEmpty ? [MarkdownBlock(content: "")] : parsed
@@ -78,9 +92,11 @@ struct NodeEditorView: View {
 
 struct BlockRowView: View {
     @Binding var block: MarkdownBlock
+    var index: Int
     var searchText: String
     var isHovered: Bool
     var isDropTarget: Bool
+    var debugBlocks: Bool
     var onHover: (Bool) -> Void
     var onInsertAfter: (String) -> Void
     var onMergeWithPrevious: (String) -> Void
@@ -119,7 +135,56 @@ struct BlockRowView: View {
                     .frame(height: 2)
             }
         }
+        .overlay {
+            if debugBlocks {
+                BlockDebugOverlay(block: block, index: index)
+            }
+        }
         .onHover { onHover($0) }
+    }
+}
+
+// MARK: - Debug Overlay
+
+private struct BlockDebugOverlay: View {
+    let block: MarkdownBlock
+    let index: Int
+
+    var blockType: (label: String, color: Color) {
+        let t = block.content.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("######") { return ("H6", .purple) }
+        if t.hasPrefix("#####")  { return ("H5", .purple) }
+        if t.hasPrefix("####")   { return ("H4", .purple) }
+        if t.hasPrefix("###")    { return ("H3", .purple) }
+        if t.hasPrefix("##")     { return ("H2", .purple) }
+        if t.hasPrefix("# ")     { return ("H1", .purple) }
+        if t.hasPrefix("```")    { return ("code", .orange) }
+        if t.hasPrefix("|")      { return ("table", .teal) }
+        if t.hasPrefix(">")      { return ("quote", .indigo) }
+        if t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("+ ") { return ("ul", .green) }
+        if t.first?.isNumber == true && t.dropFirst().hasPrefix(". ") { return ("ol", .green) }
+        if t == "---" || t == "***" || t == "___" { return ("hr", .gray) }
+        if t.isEmpty             { return ("empty", .gray) }
+        return ("¶", .blue)
+    }
+
+    var body: some View {
+        let (label, color) = blockType
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 3)
+                .stroke(color.opacity(0.6), lineWidth: 1)
+            HStack(spacing: 3) {
+                Text("#\(index)")
+                    .monospacedDigit()
+                Text(label)
+            }
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.8), in: RoundedRectangle(cornerRadius: 3))
+            .padding(2)
+        }
     }
 }
 
