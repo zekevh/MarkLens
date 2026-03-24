@@ -299,14 +299,33 @@ class EditorCoordinator: NSObject {
     }
 
     private func applyFenced(to range: NSRange, storage: NSTextStorage) {
+        let ns = storage.string as NSString
         Patterns.fencedCode.enumerateMatches(in: storage.string, options: [], range: range) { m, _, _ in
             guard let m else { return }
             storage.addAttribute(.font, value: Styles.monoFont, range: m.range)
             storage.addAttribute(.backgroundColor, value: Styles.codeBackground, range: m.range)
             storage.addAttribute(.paragraphStyle, value: Styles.codeParagraphStyle, range: m.range)
-            if m.range(at: 1).length > 0 { storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: m.range(at: 1)) }
-            if m.range(at: 2).length > 0 { storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: m.range(at: 2)) }
-            if m.range(at: 3).length > 0 { storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: m.range(at: 3)) }
+
+            let openFence  = m.range(at: 1)
+            let codeBody   = m.range(at: 2)
+            let closeFence = m.range(at: 3)
+
+            if openFence.length > 0  { storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: openFence) }
+            if codeBody.length > 0   { storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: codeBody) }
+            if closeFence.length > 0 { storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: closeFence) }
+
+            // Code syntax highlighting — extract language from opening fence line
+            if codeBody.length > 0 {
+                let fenceLine = ns.substring(with: openFence)
+                let language = fenceLine
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .drop(while: { $0 == "`" })
+                    .trimmingCharacters(in: .whitespaces)
+                    .lowercased()
+                if !language.isEmpty {
+                    CodeHighlighter.apply(to: storage, codeRange: codeBody, language: language)
+                }
+            }
         }
     }
 
