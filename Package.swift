@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.1
 import PackageDescription
 
 let package = Package(
@@ -14,6 +14,11 @@ let package = Package(
             resources: [
                 .process("Assets.xcassets"),
                 .copy("PrivacyInfo.xcprivacy")
+            ],
+            swiftSettings: [
+                // Swift 6 strict concurrency causes a compiler crash (signal 6) on the
+                // macOS 15 SDK used by GitHub Actions runners. Swift 5 mode fixes it.
+                .swiftLanguageMode(.v5)
             ]
         )
     ]
