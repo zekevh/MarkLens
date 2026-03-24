@@ -323,6 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var appState: AppState?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CrashReporter.shared.start()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.addObserver(
