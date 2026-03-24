@@ -11,48 +11,35 @@ permissions:
 jobs:
   build:
     runs-on: [self-hosted, macos-26]
+    env:
+      SCHEME: MarkLens
+      CONFIGURATION: Release
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set version from tag
+      - name: Build archive
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          BUILD=$(git rev-list --count HEAD)
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD}" Info.plist
+          xcodebuild archive \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -archivePath "$RUNNER_TEMP/MarkLens.xcarchive" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$(git rev-list --count HEAD)" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            | xcpretty
 
-      - name: Build (universal)
+      - name: Export app
         run: |
-          swift build -c release --arch arm64
-          swift build -c release --arch x86_64
-
-      - name: Assemble .app bundle
-        run: |
-          APP="$RUNNER_TEMP/MarkLens.app"
-          mkdir -p "$APP/Contents/MacOS"
-          mkdir -p "$APP/Contents/Resources"
-
-          # Universal binary
-          lipo \
-            .build/arm64-apple-macosx/release/MarkLens \
-            .build/x86_64-apple-macosx/release/MarkLens \
-            -create -output "$APP/Contents/MacOS/MarkLens"
-          chmod +x "$APP/Contents/MacOS/MarkLens"
-
-          cp Info.plist "$APP/Contents/"
-
-          # SPM resource bundle (Bundle.module resolves this at runtime)
-          BUNDLE=".build/arm64-apple-macosx/release/MarkLens_MarkLens.bundle"
-          if [ -d "$BUNDLE" ]; then
-            cp -R "$BUNDLE" "$APP/Contents/Resources/"
-            # Surface Assets.car at the bundle root so the OS resolves CFBundleIconName
-            [ -f "$BUNDLE/Assets.car" ] && cp "$BUNDLE/Assets.car" "$APP/Contents/Resources/"
-          fi
-
-          echo "APP=$APP" >> $GITHUB_ENV
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/MarkLens.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ExportOptions.plist
 
       - name: Ad-hoc sign
         run: |
@@ -61,14 +48,13 @@ jobs:
             --deep \
             --force \
             --options runtime \
-            --entitlements MarkLens.entitlements \
-            "$APP"
+            "$RUNNER_TEMP/export/MarkLens.app"
 
       - name: Create DMG
         run: |
           hdiutil create \
             -volname "MarkLens" \
-            -srcfolder "$APP" \
+            -srcfolder "$RUNNER_TEMP/export/MarkLens.app" \
             -ov \
             -format UDZO \
             "$RUNNER_TEMP/MarkLens-${VERSION}.dmg"
@@ -76,8 +62,7 @@ jobs:
 
       - name: Compute SHA256
         run: |
-          SHA=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
-          echo "SHA256=${SHA}" >> $GITHUB_ENV
+          echo "SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')" >> $GITHUB_ENV
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -87,14 +72,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Summary
+      - name: Update Homebrew Tap
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
-          echo "## Release v${VERSION}" >> $GITHUB_STEP_SUMMARY
-          echo "- DMG: \`MarkLens-${VERSION}.dmg\`" >> $GITHUB_STEP_SUMMARY
-          echo "- SHA256: \`${SHA256}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Update **Casks/marklens.rb** in homebrew-tap:" >> $GITHUB_STEP_SUMMARY
-          echo '```ruby' >> $GITHUB_STEP_SUMMARY
-          echo "  version \"${VERSION}\"" >> $GITHUB_STEP_SUMMARY
-          echo "  sha256 \"${SHA256}\"" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          git clone https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/zekevh/homebrew-tap.git "$RUNNER_TEMP/homebrew-tap"
+          CASK="$RUNNER_TEMP/homebrew-tap/Casks/marklens.rb"
+          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" "$CASK"
+          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA256}\"/" "$CASK"
+          cd "$RUNNER_TEMP/homebrew-tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/marklens.rb
+          git commit -m "Bump marklens to ${VERSION}"
+          git push

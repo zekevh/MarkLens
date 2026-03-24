@@ -4,8 +4,8 @@ import AppKit
 // MARK: - Custom Attribute Keys
 
 extension NSAttributedString.Key {
-    static let markdownHR       = NSAttributedString.Key("md.hr")
-    static let markdownCheckbox = NSAttributedString.Key("md.checkbox") // Bool: true = checked
+    nonisolated(unsafe) static let markdownHR       = NSAttributedString.Key("md.hr")
+    nonisolated(unsafe) static let markdownCheckbox = NSAttributedString.Key("md.checkbox") // Bool: true = checked
 }
 
 // MARK: - MarkdownLayoutManager
@@ -13,7 +13,10 @@ extension NSAttributedString.Key {
 
 final class MarkdownLayoutManager: NSLayoutManager {
 
-    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+    nonisolated override init() { super.init() }
+    nonisolated required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    nonisolated override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage else { return }
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
@@ -410,7 +413,7 @@ enum Styles {
         .paragraphStyle: defaultParagraphStyle
     ]
 
-    static var defaultParagraphStyle: NSParagraphStyle {
+    nonisolated static var defaultParagraphStyle: NSParagraphStyle {
         let ps = NSMutableParagraphStyle(); ps.lineSpacing = 4; ps.paragraphSpacing = 2; return ps
     }
 
