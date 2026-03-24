@@ -132,6 +132,15 @@ struct BlockRowView: View {
 
     @State private var height: CGFloat = 32
 
+    private var blockPadding: (top: CGFloat, bottom: CGFloat) {
+        let t = block.content.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("# ")      { return (top: 40, bottom: 8) }
+        if t.hasPrefix("## ")     { return (top: 32, bottom: 6) }
+        if t.hasPrefix("### ")    { return (top: 24, bottom: 4) }
+        if t.hasPrefix("####")    { return (top: 20, bottom: 4) }
+        return (top: 0, bottom: 0)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             // Drag strip — pure SwiftUI, left of the NSTextView so no z-order conflict
@@ -159,6 +168,8 @@ struct BlockRowView: View {
                 BlockDebugOverlay(block: block, index: index)
             }
         }
+        .padding(.top, index == 0 ? 0 : blockPadding.top)
+        .padding(.bottom, blockPadding.bottom)
     }
 }
 

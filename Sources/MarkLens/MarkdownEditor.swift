@@ -476,8 +476,8 @@ enum Styles {
     static func headingParagraphStyle(level: Int) -> NSParagraphStyle {
         let ps = NSMutableParagraphStyle()
         ps.lineSpacing = 2
-        ps.paragraphSpacingBefore = level <= 2 ? 16 : 10
-        ps.paragraphSpacing = level <= 2 ? 6 : 4
+        ps.paragraphSpacingBefore = level == 1 ? 40 : level == 2 ? 32 : 24
+        ps.paragraphSpacing      = level == 1 ? 16 : level == 2 ? 12 : 8
         return ps
     }
 
