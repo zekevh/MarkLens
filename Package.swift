@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MarkLens",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "MarkLens", targets: ["MarkLens"])
     ],
