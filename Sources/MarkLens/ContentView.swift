@@ -153,7 +153,7 @@ struct RecentFilesView: View {
     var body: some View {
         List(appState.recentURLs, id: \.path, selection: Binding(
             get: { appState.selectedFileURL },
-            set: { url in if let url { appState.loadFile(url) } }
+            set: { url in if let url { appState.openRecent(url) } }
         )) { url in
             VStack(alignment: .leading, spacing: 2) {
                 Text(url.lastPathComponent)

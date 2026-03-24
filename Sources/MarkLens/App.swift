@@ -96,11 +96,10 @@ final class AppState: ObservableObject {
 
     private var saveWorkItem: DispatchWorkItem?
     private var lastSavedText: String? = nil
+    private var recentBookmarks: [String: Data] = [:]   // url.path → security-scoped bookmark
     private let fileWatcher = FileWatcher()
 
-    var rootFolderURL: URL? {
-        didSet { UserDefaults.standard.set(rootFolderURL?.path, forKey: "lastRootFolderPath") }
-    }
+    var rootFolderURL: URL?
 
     // MARK: File loading
 
@@ -114,7 +113,6 @@ final class AppState: ObservableObject {
         }
         lastSavedText = documentText
         selectedFileURL = url
-        UserDefaults.standard.set(url.path, forKey: "lastSelectedFilePath")
         fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
         recordRecent(url)
     }
@@ -124,21 +122,62 @@ final class AppState: ObservableObject {
         list.removeAll { $0.path == url.path }
         list.insert(url, at: 0)
         recentURLs = Array(list.prefix(10))
+
+        if let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil) {
+            recentBookmarks[url.path] = bookmark
+            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
+        }
         UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
+    }
+
+    func openRecent(_ url: URL) {
+        guard let bookmarkData = recentBookmarks[url.path] else {
+            // No bookmark — file was recorded before sandbox was enabled; ask user to reopen manually
+            errorMessage = "Cannot access \"\(url.lastPathComponent)\" — please open it via File > Open."
+            recentURLs.removeAll { $0.path == url.path }
+            recentBookmarks.removeValue(forKey: url.path)
+            UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
+            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
+            return
+        }
+        var isStale = false
+        do {
+            let scopedURL = try URL(resolvingBookmarkData: bookmarkData,
+                                    options: .withSecurityScope,
+                                    relativeTo: nil,
+                                    bookmarkDataIsStale: &isStale)
+            guard scopedURL.startAccessingSecurityScopedResource() else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+            if isStale, let refreshed = try? scopedURL.bookmarkData(options: .withSecurityScope,
+                                                                    includingResourceValuesForKeys: nil,
+                                                                    relativeTo: nil) {
+                recentBookmarks[url.path] = refreshed
+                UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
+            }
+            loadFile(scopedURL)
+        } catch {
+            errorMessage = "Cannot access \"\(url.lastPathComponent)\": \(error.localizedDescription)"
+        }
     }
 
     private func reloadIfChangedOnDisk() {
         guard let url = selectedFileURL else { return }
         guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
         guard onDisk != documentText else { return }
+        // Disk matches what we last wrote — our own save fired the watcher; user may have
+        // typed more since. Either way, nothing to do.
+        guard onDisk != lastSavedText else { return }
 
         if documentText == lastSavedText {
-            // No unsaved edits — silently reload
+            // Disk changed, no unsaved edits — silently reload
             documentText = onDisk
             lastSavedText = onDisk
         } else {
-            // User has edits that haven't reached disk — surface the conflict
+            // Disk changed AND user has unsaved edits — surface the conflict
             externalEditConflict = ExternalEditConflict(
                 diskContent: onDisk,
                 fileName: url.lastPathComponent
@@ -160,24 +199,12 @@ final class AppState: ObservableObject {
     }
 
     func restoreLastSession() {
+        recentBookmarks = (UserDefaults.standard.dictionary(forKey: "recentBookmarks") as? [String: Data]) ?? [:]
         let storedPaths = UserDefaults.standard.stringArray(forKey: "recentURLPaths") ?? []
+        // Keep only paths that have a bookmark (sandbox can't verify existence without access)
         recentURLs = storedPaths
+            .filter { recentBookmarks[$0] != nil }
             .map { URL(fileURLWithPath: $0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-
-        if let folderPath = UserDefaults.standard.string(forKey: "lastRootFolderPath") {
-            let folderURL = URL(fileURLWithPath: folderPath)
-            guard FileManager.default.fileExists(atPath: folderPath) else { return }
-            rootFolderURL = folderURL
-            rootNodes = buildTree(at: folderURL)
-        }
-        if let filePath = UserDefaults.standard.string(forKey: "lastSelectedFilePath") {
-            let fileURL = URL(fileURLWithPath: filePath)
-            guard FileManager.default.fileExists(atPath: filePath) else { return }
-            loadFile(fileURL)
-        } else if let first = firstFile(in: rootNodes) {
-            loadFile(first.url)
-        }
     }
 
     func saveCurrentFile(text: String) {
@@ -187,10 +214,10 @@ final class AppState: ObservableObject {
             return
         }
         saveWorkItem?.cancel()
+        lastSavedText = text   // mark now so our own write doesn't trigger a conflict
         let item = DispatchWorkItem { [weak self] in
             do {
                 try text.write(to: url, atomically: true, encoding: .utf8)
-                DispatchQueue.main.async { self?.lastSavedText = text }
             } catch {
                 DispatchQueue.main.async {
                     self?.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
@@ -219,8 +246,6 @@ final class AppState: ObservableObject {
         rootNodes = []
         selectedFileURL = nil
         documentText = ""
-        UserDefaults.standard.removeObject(forKey: "lastRootFolderPath")
-        UserDefaults.standard.removeObject(forKey: "lastSelectedFilePath")
     }
 
     // MARK: New file
