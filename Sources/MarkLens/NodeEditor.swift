@@ -9,7 +9,6 @@ struct NodeEditorView: View {
     var onTextChange: (String) -> Void
 
     @State private var blocks: [MarkdownBlock] = []
-    @State private var hoveredID: UUID? = nil
     @State private var dropTargetID: UUID? = nil
     @State private var debugBlocks = false
 
@@ -21,10 +20,8 @@ struct NodeEditorView: View {
                         block: $block,
                         index: index,
                         searchText: searchText,
-                        isHovered: hoveredID == block.id,
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
-                        onHover: { hovered in hoveredID = hovered ? block.id : nil },
                         onInsertAfter: { newContent in insertBlock(after: block.id, content: newContent) },
                         onMergeWithPrevious: { trailing in mergeWithPrevious(block.id, trailing: trailing) }
                     )
@@ -45,7 +42,8 @@ struct NodeEditorView: View {
                     }
                 }
             }
-            .padding(.horizontal, 48)
+            .padding(.leading, 8)
+            .padding(.trailing, 48)
             .padding(.vertical, 40)
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -88,16 +86,46 @@ struct NodeEditorView: View {
     }
 }
 
+// MARK: - DragStrip
+
+private struct DragStrip: View {
+    let blockID: UUID
+    let height: CGFloat
+    @State private var hovered = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: 40, height: height)
+            .overlay {
+                RoundedRectangle(cornerRadius: 99)
+                    .fill(Color.secondary.opacity(hovered ? 0.12 : 0))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .overlay {
+                        Image(systemName: "circle.grid.2x3.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.secondary.opacity(hovered ? 0.5 : 0))
+                    }
+                    .animation(.easeInOut(duration: 0.15), value: hovered)
+            }
+            .contentShape(Rectangle())
+            .draggable(blockID.uuidString)
+            .onHover { isHovered in
+                hovered = isHovered
+                if isHovered { NSCursor.openHand.set() }
+                else { NSCursor.arrow.set() }
+            }
+    }
+}
+
 // MARK: - BlockRowView
 
 struct BlockRowView: View {
     @Binding var block: MarkdownBlock
     var index: Int
     var searchText: String
-    var isHovered: Bool
     var isDropTarget: Bool
     var debugBlocks: Bool
-    var onHover: (Bool) -> Void
     var onInsertAfter: (String) -> Void
     var onMergeWithPrevious: (String) -> Void
 
@@ -105,19 +133,9 @@ struct BlockRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Drag handle — visible on hover, acts as the draggable source
-            Image(systemName: "circle.grid.2x3.fill")
-                .font(.system(size: 10))
-                .foregroundStyle(isHovered ? Color.secondary.opacity(0.45) : .clear)
-                .frame(width: 28, height: max(height, 24))
-                .contentShape(Rectangle())
-                .draggable(block.id.uuidString)
-                .onContinuousHover { phase in
-                    if case .active = phase { NSCursor.openHand.set() }
-                    else { NSCursor.arrow.set() }
-                }
+            // Drag strip — pure SwiftUI, left of the NSTextView so no z-order conflict
+            DragStrip(blockID: block.id, height: max(height, 24))
 
-            // Per-block inline editor
             BlockEditorView(
                 content: $block.content,
                 searchText: searchText,
@@ -140,7 +158,6 @@ struct BlockRowView: View {
                 BlockDebugOverlay(block: block, index: index)
             }
         }
-        .onHover { onHover($0) }
     }
 }
 
