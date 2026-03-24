@@ -413,6 +413,49 @@ final class BlockEditorCoordinator: NSObject {
         let inset = textView.textContainerInset
         onHeightChange(max(ceil(rect.height) + inset.height * 2, 24))
     }
+
+    func scrollCursorToVisible(in textView: NSTextView) {
+        guard let lm = textView.layoutManager,
+              let tc = textView.textContainer else { return }
+
+        let charRange = textView.selectedRange()
+        guard charRange.location != NSNotFound else { return }
+
+        lm.ensureLayout(for: tc)
+        let glyphCount = lm.numberOfGlyphs
+        guard glyphCount > 0 else { return }
+
+        let loc = min(charRange.location, textView.string.count)
+        let glyphIndex = loc < textView.string.count
+            ? lm.glyphIndexForCharacter(at: loc)
+            : glyphCount - 1
+        let safeGlyph = min(glyphIndex, glyphCount - 1)
+
+        var lineRect = lm.lineFragmentRect(forGlyphAt: safeGlyph, effectiveRange: nil)
+        lineRect = lineRect.offsetBy(dx: textView.textContainerInset.width,
+                                     dy: textView.textContainerInset.height)
+
+        // Walk up to find the outer NSScrollView (not the per-block one whose documentView IS this textView)
+        var outerSV: NSScrollView?
+        var view: NSView? = textView.superview
+        while let v = view {
+            if let sv = v as? NSScrollView, sv.documentView !== textView {
+                outerSV = sv; break
+            }
+            view = v.superview
+        }
+
+        guard let outerSV, let docView = outerSV.documentView else { return }
+
+        var target = textView.convert(lineRect, to: docView)
+        // Add vertical padding so the cursor line is never flush against the edge
+        target = target.insetBy(dx: 0, dy: -60)
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            outerSV.contentView.animator().scrollToVisible(target)
+        }
+    }
 }
 
 extension BlockEditorCoordinator: @preconcurrency NSTextStorageDelegate {
@@ -438,6 +481,7 @@ extension BlockEditorCoordinator: NSTextViewDelegate {
         Task { [weak self, weak tv] in
             guard let self, let tv else { return }
             self.updateHeight(for: tv)
+            self.scrollCursorToVisible(in: tv)
         }
     }
 }
