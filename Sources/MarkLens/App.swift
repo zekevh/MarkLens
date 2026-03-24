@@ -2,6 +2,61 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AppKit
 
+// MARK: - FileWatcher
+// Uses kqueue (O_EVTONLY) to detect writes, renames, and atomic replacements
+// (git checkout, most editors) without participating in file-system locking.
+
+@MainActor
+final class FileWatcher {
+    private var source: DispatchSourceFileSystemObject?
+    private var watchedURL: URL?
+    private var handler: (() -> Void)?
+
+    func watch(_ url: URL, onChange: @escaping () -> Void) {
+        watchedURL = url
+        handler    = onChange
+        start(at: url)
+    }
+
+    func stop() {
+        source?.cancel()
+        source = nil
+    }
+
+    private func start(at url: URL) {
+        stop()
+        let fd = open(url.path, O_EVTONLY)
+        guard fd != -1 else { return }
+
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .main
+        )
+
+        src.setEventHandler { [weak self] in
+            guard let self else { return }
+            let events = src.data
+            if events.contains(.rename) || events.contains(.delete) {
+                // Atomic replacement (git, most editors write to a temp file then rename).
+                // Re-arm after a short delay so the new inode is in place.
+                self.stop()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self, let url = self.watchedURL else { return }
+                    self.start(at: url)
+                    self.handler?()
+                }
+            } else {
+                self.handler?()
+            }
+        }
+
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        source = src
+    }
+}
+
 // MARK: - FileNode
 
 struct FileNode: Identifiable, Hashable {
@@ -25,10 +80,12 @@ final class AppState: ObservableObject {
     @Published var selectedFileURL: URL? = nil
     @Published var documentText: String = ""
     @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
+    @Published var recentURLs: [URL] = []
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
 
     private var saveWorkItem: DispatchWorkItem?
+    private let fileWatcher = FileWatcher()
 
     var rootFolderURL: URL? {
         didSet { UserDefaults.standard.set(rootFolderURL?.path, forKey: "lastRootFolderPath") }
@@ -41,9 +98,33 @@ final class AppState: ObservableObject {
         selectedFileURL = url
         documentText = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         UserDefaults.standard.set(url.path, forKey: "lastSelectedFilePath")
+        fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
+        recordRecent(url)
+    }
+
+    private func recordRecent(_ url: URL) {
+        var list = recentURLs
+        list.removeAll { $0.path == url.path }
+        list.insert(url, at: 0)
+        recentURLs = Array(list.prefix(10))
+        UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
+        NSDocumentController.shared.noteNewRecentDocumentURL(url)
+    }
+
+    private func reloadIfChangedOnDisk() {
+        guard let url = selectedFileURL else { return }
+        guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
+        // Ignore the notification that fires right after our own save
+        guard onDisk != documentText else { return }
+        documentText = onDisk
     }
 
     func restoreLastSession() {
+        let storedPaths = UserDefaults.standard.stringArray(forKey: "recentURLPaths") ?? []
+        recentURLs = storedPaths
+            .map { URL(fileURLWithPath: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+
         if let folderPath = UserDefaults.standard.string(forKey: "lastRootFolderPath") {
             let folderURL = URL(fileURLWithPath: folderPath)
             guard FileManager.default.fileExists(atPath: folderPath) else { return }
@@ -74,6 +155,21 @@ final class AppState: ObservableObject {
         saveWorkItem?.perform()
         saveWorkItem?.cancel()
         saveWorkItem = nil
+    }
+
+    // MARK: Close folder / workspace
+
+    func closeFolder() {
+        saveWorkItem?.perform()
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        fileWatcher.stop()
+        rootFolderURL = nil
+        rootNodes = []
+        selectedFileURL = nil
+        documentText = ""
+        UserDefaults.standard.removeObject(forKey: "lastRootFolderPath")
+        UserDefaults.standard.removeObject(forKey: "lastSelectedFilePath")
     }
 
     // MARK: New file
@@ -209,6 +305,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        let url = URL(fileURLWithPath: filename)
+        guard FileManager.default.fileExists(atPath: filename) else { return false }
+        appState?.rootFolderURL = nil
+        appState?.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+        appState?.loadFile(url)
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Flush any pending debounced save before quitting so no edits are lost
         appState?.flushPendingSave()
@@ -250,6 +355,10 @@ struct MarkLensApp: App {
                     .keyboardShortcut("o", modifiers: .command)
                 Button("Open Folder…") { appState.openFolderPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
+                Divider()
+                Button("Close Folder") { appState.closeFolder() }
+                    .keyboardShortcut("w", modifiers: [.command, .shift])
+                    .disabled(appState.rootNodes.isEmpty)
             }
             CommandGroup(after: .textEditing) {
                 Button("Find…") { appState.isSearchFocused = true }

@@ -68,20 +68,25 @@ struct SidebarView: View {
     var body: some View {
         Group {
             if appState.rootNodes.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.tertiary)
-                    Text("Open a folder or file")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Button("Open Folder…") { appState.openFolderPanel() }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(Color.accentColor)
+                if appState.recentURLs.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.tertiary)
+                        Text("Open a folder or file")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Button("Open Folder…") { appState.openFolderPanel() }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    RecentFilesView()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(appState.rootNodes, children: \.optionalChildren,
+
                      selection: Binding(
                         get: { appState.selectedFileURL },
                         set: { url in
@@ -117,6 +122,41 @@ struct SidebarView: View {
                 }
                 .listStyle(.sidebar)
             }
+        }
+    }
+}
+
+// MARK: - RecentFilesView
+
+struct RecentFilesView: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        List(appState.recentURLs, id: \.path, selection: Binding(
+            get: { appState.selectedFileURL },
+            set: { url in if let url { appState.loadFile(url) } }
+        )) { url in
+            VStack(alignment: .leading, spacing: 2) {
+                Text(url.lastPathComponent)
+                    .lineLimit(1)
+                Text(url.deletingLastPathComponent().path
+                        .replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            .tag(url)
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            Button("Open Folder…") { appState.openFolderPanel() }
+                .buttonStyle(.borderless)
+                .foregroundStyle(Color.accentColor)
+                .font(.callout)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(.bar)
         }
     }
 }
