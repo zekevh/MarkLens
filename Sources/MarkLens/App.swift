@@ -72,6 +72,13 @@ struct FileNode: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+// MARK: - ExternalEditConflict
+
+struct ExternalEditConflict {
+    let diskContent: String
+    let fileName: String
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -85,8 +92,10 @@ final class AppState: ObservableObject {
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
     @Published var errorMessage: String? = nil
+    @Published var externalEditConflict: ExternalEditConflict? = nil
 
     private var saveWorkItem: DispatchWorkItem?
+    private var lastSavedText: String? = nil
     private let fileWatcher = FileWatcher()
 
     var rootFolderURL: URL? {
@@ -103,6 +112,7 @@ final class AppState: ObservableObject {
             errorMessage = "Could not open \"\(url.lastPathComponent)\": \(error.localizedDescription)"
             return
         }
+        lastSavedText = documentText
         selectedFileURL = url
         UserDefaults.standard.set(url.path, forKey: "lastSelectedFilePath")
         fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
@@ -122,7 +132,27 @@ final class AppState: ObservableObject {
         guard let url = selectedFileURL else { return }
         guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
         guard onDisk != documentText else { return }
-        documentText = onDisk
+
+        if documentText == lastSavedText {
+            // No unsaved edits — silently reload
+            documentText = onDisk
+            lastSavedText = onDisk
+        } else {
+            // User has edits that haven't reached disk — surface the conflict
+            externalEditConflict = ExternalEditConflict(
+                diskContent: onDisk,
+                fileName: url.lastPathComponent
+            )
+        }
+    }
+
+    func resolveConflict(keepMine: Bool) {
+        guard let conflict = externalEditConflict else { return }
+        externalEditConflict = nil
+        if !keepMine {
+            documentText = conflict.diskContent
+            lastSavedText = conflict.diskContent
+        }
     }
 
     private func present(_ error: Error, context: String) {
@@ -160,6 +190,7 @@ final class AppState: ObservableObject {
         let item = DispatchWorkItem { [weak self] in
             do {
                 try text.write(to: url, atomically: true, encoding: .utf8)
+                DispatchQueue.main.async { self?.lastSavedText = text }
             } catch {
                 DispatchQueue.main.async {
                     self?.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
@@ -353,6 +384,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let window = notification.object as? NSWindow else { return }
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        if window.frameAutosaveName.isEmpty {
+            window.setFrameAutosaveName("MainWindow")
+        }
     }
 }
 

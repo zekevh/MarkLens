@@ -52,6 +52,18 @@ struct ContentView: View {
         } message: {
             Text(appState.errorMessage ?? "")
         }
+        .alert(
+            "File Changed on Disk",
+            isPresented: Binding(
+                get: { appState.externalEditConflict != nil },
+                set: { if !$0 { appState.resolveConflict(keepMine: true) } }
+            )
+        ) {
+            Button("Keep My Changes", role: .cancel) { appState.resolveConflict(keepMine: true) }
+            Button("Use Disk Version", role: .destructive) { appState.resolveConflict(keepMine: false) }
+        } message: {
+            Text("\"\(appState.externalEditConflict?.fileName ?? "")\" was modified by another app while you had unsaved changes.")
+        }
         .if(appState.selectedFileURL != nil) { view in
             view
                 .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
