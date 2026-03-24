@@ -13,9 +13,6 @@ final class CrashReporter: NSObject, MXMetricManagerSubscriber {
         MXMetricManager.shared.add(self)
     }
 
-    // We don't process general performance metrics.
-    func didReceive(_ payloads: [MXMetricPayload]) {}
-
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
         for payload in payloads where !(payload.crashDiagnostics ?? []).isEmpty {
             persistPayload(payload)
