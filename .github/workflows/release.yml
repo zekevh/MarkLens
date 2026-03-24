@@ -16,16 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
 
       - name: Set version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          BUILD=$(git rev-list --count HEAD)
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          # Stamp the marketing version; CFBundleVersion was already bumped locally
-          # via scripts/bump-version.sh before tagging.
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD}" Info.plist
 
       - name: Build (universal)
         run: |
