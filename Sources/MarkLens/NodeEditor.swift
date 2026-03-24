@@ -1,6 +1,69 @@
 import SwiftUI
 import AppKit
 
+// MARK: - CursorPlacement
+
+enum CursorPlacement {
+    case start
+    case end
+    case position(Int)
+}
+
+// MARK: - BlockRegistry
+// Holds weak refs to each block's NSTextView so we can focus them cross-block.
+// Supports a pending focus: if the target block isn't rendered yet (e.g. just inserted),
+// the focus is deferred and applied the moment the text view registers itself.
+
+@MainActor
+final class BlockRegistry: ObservableObject {
+    private final class WeakRef { weak var value: NSTextView? }
+    private var store: [UUID: WeakRef] = [:]
+    private var pendingID: UUID?
+    private var pendingPlacement: CursorPlacement = .start
+
+    func register(_ tv: NSTextView, id: UUID) {
+        let ref = WeakRef(); ref.value = tv
+        store[id] = ref
+        if pendingID == id {
+            applyFocus(to: tv, placement: pendingPlacement)
+            pendingID = nil
+        }
+    }
+
+    func focus(_ id: UUID, at placement: CursorPlacement) {
+        if let tv = store[id]?.value, tv.window != nil {
+            applyFocus(to: tv, placement: placement)
+        } else {
+            pendingID = id
+            pendingPlacement = placement
+        }
+    }
+
+    private func applyFocus(to tv: NSTextView, placement: CursorPlacement) {
+        if tv.window != nil {
+            doFocus(tv, placement: placement)
+        } else {
+            // Text view not yet in window (e.g. freshly inserted block) — defer one run loop
+            Task { @MainActor [weak tv] in
+                guard let tv else { return }
+                self.doFocus(tv, placement: placement)
+            }
+        }
+    }
+
+    private func doFocus(_ tv: NSTextView, placement: CursorPlacement) {
+        tv.window?.makeFirstResponder(tv)
+        let pos: Int
+        switch placement {
+        case .start:           pos = 0
+        case .end:             pos = tv.string.count
+        case .position(let p): pos = min(max(p, 0), tv.string.count)
+        }
+        tv.setSelectedRange(NSRange(location: pos, length: 0))
+        Task { scrollCursorToVisible(in: tv) }
+    }
+}
+
 // MARK: - NodeEditorView
 
 struct NodeEditorView: View {
@@ -11,6 +74,7 @@ struct NodeEditorView: View {
     @State private var blocks: [MarkdownBlock] = []
     @State private var dropTargetID: UUID? = nil
     @State private var debugBlocks = false
+    @StateObject private var registry = BlockRegistry()
 
     var body: some View {
         ScrollView {
@@ -22,8 +86,11 @@ struct NodeEditorView: View {
                         searchText: searchText,
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
+                        registry: registry,
                         onInsertAfter: { newContent in insertBlock(after: block.id, content: newContent) },
-                        onMergeWithPrevious: { trailing in mergeWithPrevious(block.id, trailing: trailing) }
+                        onMergeWithPrevious: { trailing in mergeWithPrevious(block.id, trailing: trailing) },
+                        onNavigatePrevious: { placement in navigatePrevious(from: block.id, placement: placement) },
+                        onNavigateNext:     { placement in navigateNext(from: block.id, placement: placement) }
                     )
                     .dropDestination(for: String.self) { items, _ in
                         guard let idString = items.first,
@@ -74,16 +141,31 @@ struct NodeEditorView: View {
 
     private func insertBlock(after id: UUID, content: String) {
         guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
-        blocks.insert(MarkdownBlock(content: content), at: idx + 1)
+        let newBlock = MarkdownBlock(content: content)
+        blocks.insert(newBlock, at: idx + 1)
+        registry.focus(newBlock.id, at: .start)
     }
 
     private func mergeWithPrevious(_ id: UUID, trailing: String) {
         guard let idx = blocks.firstIndex(where: { $0.id == id }), idx > 0 else { return }
+        let prevID = blocks[idx - 1].id
+        let junctionPos = blocks[idx - 1].content.count + (blocks[idx - 1].content.isEmpty ? 0 : 1)
         if !trailing.isEmpty {
             let sep = blocks[idx - 1].content.isEmpty ? "" : "\n"
             blocks[idx - 1].content += sep + trailing
         }
         blocks.remove(at: idx)
+        registry.focus(prevID, at: .position(junctionPos))
+    }
+
+    private func navigatePrevious(from id: UUID, placement: CursorPlacement) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx > 0 else { return }
+        registry.focus(blocks[idx - 1].id, at: placement)
+    }
+
+    private func navigateNext(from id: UUID, placement: CursorPlacement) {
+        guard let idx = blocks.firstIndex(where: { $0.id == id }), idx < blocks.count - 1 else { return }
+        registry.focus(blocks[idx + 1].id, at: placement)
     }
 }
 
@@ -127,8 +209,11 @@ struct BlockRowView: View {
     var searchText: String
     var isDropTarget: Bool
     var debugBlocks: Bool
+    var registry: BlockRegistry
     var onInsertAfter: (String) -> Void
     var onMergeWithPrevious: (String) -> Void
+    var onNavigatePrevious: (CursorPlacement) -> Void
+    var onNavigateNext: (CursorPlacement) -> Void
 
     @State private var height: CGFloat = 32
 
@@ -147,11 +232,15 @@ struct BlockRowView: View {
             DragStrip(blockID: block.id, height: max(height, 24))
 
             BlockEditorView(
+                blockID: block.id,
                 content: $block.content,
                 searchText: searchText,
+                registry: registry,
                 onHeightChange: { h in height = h },
                 onInsertAfter: onInsertAfter,
-                onMergeWithPrevious: onMergeWithPrevious
+                onMergeWithPrevious: onMergeWithPrevious,
+                onNavigatePrevious: onNavigatePrevious,
+                onNavigateNext: onNavigateNext
             )
             .frame(height: max(height, 24))
         }
@@ -217,14 +306,49 @@ private struct BlockDebugOverlay: View {
     }
 }
 
+// MARK: - Scroll helper
+
+@MainActor
+private func scrollCursorToVisible(in textView: NSTextView) {
+    guard let lm = textView.layoutManager,
+          let tc = textView.textContainer else { return }
+    let charRange = textView.selectedRange()
+    guard charRange.location != NSNotFound else { return }
+    lm.ensureLayout(for: tc)
+    let glyphCount = lm.numberOfGlyphs
+    guard glyphCount > 0 else { return }
+    let loc = min(charRange.location, textView.string.count)
+    let glyphIndex = loc < textView.string.count ? lm.glyphIndexForCharacter(at: loc) : glyphCount - 1
+    var lineRect = lm.lineFragmentRect(forGlyphAt: min(glyphIndex, glyphCount - 1), effectiveRange: nil)
+    lineRect = lineRect.offsetBy(dx: textView.textContainerInset.width,
+                                 dy: textView.textContainerInset.height)
+    var outerSV: NSScrollView?
+    var view: NSView? = textView.superview
+    while let v = view {
+        if let sv = v as? NSScrollView, sv.documentView !== textView { outerSV = sv; break }
+        view = v.superview
+    }
+    guard let outerSV, let docView = outerSV.documentView else { return }
+    var target = textView.convert(lineRect, to: docView)
+    target = target.insetBy(dx: 0, dy: -60)
+    NSAnimationContext.runAnimationGroup { ctx in
+        ctx.duration = 0.12
+        outerSV.contentView.animator().scrollToVisible(target)
+    }
+}
+
 // MARK: - BlockEditorView (NSViewRepresentable)
 
 struct BlockEditorView: NSViewRepresentable {
+    var blockID: UUID
     @Binding var content: String
     var searchText: String
+    var registry: BlockRegistry
     var onHeightChange: (CGFloat) -> Void
     var onInsertAfter: (String) -> Void
     var onMergeWithPrevious: (String) -> Void
+    var onNavigatePrevious: (CursorPlacement) -> Void
+    var onNavigateNext: (CursorPlacement) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let storage = NSTextStorage()
@@ -261,6 +385,10 @@ struct BlockEditorView: NSViewRepresentable {
             guard let coord, let tv = textView else { return }
             coord.onMergeWithPrevious(tv.string)
         }
+        textView.onNavigatePrevious = { [weak coord] p in coord?.onNavigatePrevious(p) }
+        textView.onNavigateNext     = { [weak coord] p in coord?.onNavigateNext(p) }
+
+        registry.register(textView, id: blockID)
 
         if !content.isEmpty {
             context.coordinator.isLoading = true
@@ -289,6 +417,8 @@ struct BlockEditorView: NSViewRepresentable {
         context.coordinator.onHeightChange      = onHeightChange
         context.coordinator.onInsertAfter       = onInsertAfter
         context.coordinator.onMergeWithPrevious = onMergeWithPrevious
+        context.coordinator.onNavigatePrevious  = onNavigatePrevious
+        context.coordinator.onNavigateNext      = onNavigateNext
 
         // Sync external content changes (e.g. merge appended to this block)
         if textView.string != content {
@@ -310,7 +440,9 @@ struct BlockEditorView: NSViewRepresentable {
             onTextChange:        { [self] t in content = t },
             onHeightChange:      onHeightChange,
             onInsertAfter:       onInsertAfter,
-            onMergeWithPrevious: onMergeWithPrevious
+            onMergeWithPrevious: onMergeWithPrevious,
+            onNavigatePrevious:  onNavigatePrevious,
+            onNavigateNext:      onNavigateNext
         )
     }
 
@@ -346,6 +478,8 @@ struct BlockEditorView: NSViewRepresentable {
 private final class BlockNSTextView: NSTextView {
     var onEnter: (() -> Void)?
     var onBackspaceAtStart: (() -> Void)?
+    var onNavigatePrevious: ((CursorPlacement) -> Void)?
+    var onNavigateNext:     ((CursorPlacement) -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -355,20 +489,51 @@ private final class BlockNSTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
-        let isReturn    = event.keyCode == 36
-        let isBackspace = event.keyCode == 51
-        let isShift     = event.modifierFlags.contains(.shift)
+        let mods     = event.modifierFlags
+        let isShift  = mods.contains(.shift)
+        let isOpt    = mods.contains(.option)
+        let isCmd    = mods.contains(.command)
+        let modified = isShift || isOpt || isCmd
 
-        if isReturn, !isShift {
+        switch event.keyCode {
+        case 36 where !isShift:                          // Return
             onEnter?(); return
-        }
-        if isBackspace {
-            let range = selectedRange()
-            if range.location == 0 && range.length == 0 {
-                onBackspaceAtStart?(); return
+        case 51:                                         // Backspace
+            let r = selectedRange()
+            if r.location == 0 && r.length == 0 { onBackspaceAtStart?(); return }
+        case 123 where !modified:                        // Left arrow
+            if selectedRange().location == 0 && selectedRange().length == 0 {
+                onNavigatePrevious?(.end); return
             }
+        case 124 where !modified:                        // Right arrow
+            if selectedRange().location == string.count && selectedRange().length == 0 {
+                onNavigateNext?(.start); return
+            }
+        case 126 where !modified:                        // Up arrow
+            if isOnFirstLine() { onNavigatePrevious?(.end); return }
+        case 125 where !modified:                        // Down arrow
+            if isOnLastLine()  { onNavigateNext?(.start); return }
+        default: break
         }
         super.keyDown(with: event)
+    }
+
+    private func isOnFirstLine() -> Bool {
+        guard let lm = layoutManager, lm.numberOfGlyphs > 0 else { return true }
+        let loc = selectedRange().location
+        let gi  = loc < string.count ? lm.glyphIndexForCharacter(at: loc) : lm.numberOfGlyphs - 1
+        let cur = lm.lineFragmentRect(forGlyphAt: min(gi, lm.numberOfGlyphs - 1), effectiveRange: nil)
+        let top = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+        return abs(cur.minY - top.minY) < 1
+    }
+
+    private func isOnLastLine() -> Bool {
+        guard let lm = layoutManager, lm.numberOfGlyphs > 0 else { return true }
+        let loc = selectedRange().location
+        let gi  = loc < string.count ? lm.glyphIndexForCharacter(at: loc) : lm.numberOfGlyphs - 1
+        let cur  = lm.lineFragmentRect(forGlyphAt: min(gi, lm.numberOfGlyphs - 1), effectiveRange: nil)
+        let last = lm.lineFragmentRect(forGlyphAt: lm.numberOfGlyphs - 1, effectiveRange: nil)
+        return abs(cur.minY - last.minY) < 1
     }
 }
 
@@ -383,19 +548,25 @@ final class BlockEditorCoordinator: NSObject {
     var onHeightChange:      (CGFloat) -> Void
     var onInsertAfter:       (String) -> Void
     var onMergeWithPrevious: (String) -> Void
+    var onNavigatePrevious:  (CursorPlacement) -> Void
+    var onNavigateNext:      (CursorPlacement) -> Void
     var isLoading = false
 
     init(
         onTextChange:        @escaping (String) -> Void,
         onHeightChange:      @escaping (CGFloat) -> Void,
         onInsertAfter:       @escaping (String) -> Void,
-        onMergeWithPrevious: @escaping (String) -> Void
+        onMergeWithPrevious: @escaping (String) -> Void,
+        onNavigatePrevious:  @escaping (CursorPlacement) -> Void,
+        onNavigateNext:      @escaping (CursorPlacement) -> Void
     ) {
         self.highlighter        = EditorCoordinator(onTextChange: { _ in })
         self.onTextChange        = onTextChange
         self.onHeightChange      = onHeightChange
         self.onInsertAfter       = onInsertAfter
         self.onMergeWithPrevious = onMergeWithPrevious
+        self.onNavigatePrevious  = onNavigatePrevious
+        self.onNavigateNext      = onNavigateNext
     }
 
     func applyFullHighlight(to storage: NSTextStorage) {
@@ -414,49 +585,8 @@ final class BlockEditorCoordinator: NSObject {
         onHeightChange(max(ceil(rect.height) + inset.height * 2, 24))
     }
 
-    func scrollCursorToVisible(in textView: NSTextView) {
-        guard let lm = textView.layoutManager,
-              let tc = textView.textContainer else { return }
-
-        let charRange = textView.selectedRange()
-        guard charRange.location != NSNotFound else { return }
-
-        lm.ensureLayout(for: tc)
-        let glyphCount = lm.numberOfGlyphs
-        guard glyphCount > 0 else { return }
-
-        let loc = min(charRange.location, textView.string.count)
-        let glyphIndex = loc < textView.string.count
-            ? lm.glyphIndexForCharacter(at: loc)
-            : glyphCount - 1
-        let safeGlyph = min(glyphIndex, glyphCount - 1)
-
-        var lineRect = lm.lineFragmentRect(forGlyphAt: safeGlyph, effectiveRange: nil)
-        lineRect = lineRect.offsetBy(dx: textView.textContainerInset.width,
-                                     dy: textView.textContainerInset.height)
-
-        // Walk up to find the outer NSScrollView (not the per-block one whose documentView IS this textView)
-        var outerSV: NSScrollView?
-        var view: NSView? = textView.superview
-        while let v = view {
-            if let sv = v as? NSScrollView, sv.documentView !== textView {
-                outerSV = sv; break
-            }
-            view = v.superview
-        }
-
-        guard let outerSV, let docView = outerSV.documentView else { return }
-
-        var target = textView.convert(lineRect, to: docView)
-        // Add vertical padding so the cursor line is never flush against the edge
-        target = target.insetBy(dx: 0, dy: -60)
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
-            outerSV.contentView.animator().scrollToVisible(target)
-        }
-    }
 }
+
 
 extension BlockEditorCoordinator: @preconcurrency NSTextStorageDelegate {
     func textStorage(
@@ -481,7 +611,7 @@ extension BlockEditorCoordinator: NSTextViewDelegate {
         Task { [weak self, weak tv] in
             guard let self, let tv else { return }
             self.updateHeight(for: tv)
-            self.scrollCursorToVisible(in: tv)
+            scrollCursorToVisible(in: tv)
         }
     }
 }
