@@ -6,10 +6,12 @@ import AppKit
 extension NSAttributedString.Key {
     nonisolated(unsafe) static let markdownHR       = NSAttributedString.Key("md.hr")
     nonisolated(unsafe) static let markdownCheckbox = NSAttributedString.Key("md.checkbox") // Bool: true = checked
+    nonisolated(unsafe) static let markdownTableRow  = NSAttributedString.Key("md.tableRow")  // marks a table row for border drawing
+    nonisolated(unsafe) static let markdownTablePipe = NSAttributedString.Key("md.tablePipe") // marks a | for vertical line drawing
 }
 
 // MARK: - MarkdownLayoutManager
-// Used only to draw horizontal rule lines; table styling is handled via NSTextBlock.
+// Draws horizontal rule lines and task-list checkboxes.
 
 final class MarkdownLayoutManager: NSLayoutManager {
 
@@ -70,6 +72,57 @@ final class MarkdownLayoutManager: NSLayoutManager {
                     )
                     img.draw(in: drawRect)
                 }
+            }
+        }
+
+        // Draw vertical column dividers at each hidden | character
+        storage.enumerateAttribute(.markdownTablePipe, in: charRange, options: []) { val, rng, _ in
+            guard val != nil else { return }
+            let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
+            guard gr.length > 0 else { return }
+            let lineRect = self.lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
+                               .offsetBy(dx: origin.x, dy: origin.y)
+            let glyphOff = self.location(forGlyphAt: gr.location)
+            let x = floor(lineRect.minX + glyphOff.x) + 0.5
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: x, y: lineRect.minY))
+            path.line(to: NSPoint(x: x, y: lineRect.maxY))
+            path.lineWidth = 0.5
+            NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
+            path.stroke()
+        }
+
+        // Draw top + bottom border lines for each table row, bounded by the outer pipes
+        storage.enumerateAttribute(.markdownTableRow, in: charRange, options: []) { val, rng, _ in
+            guard val != nil else { return }
+            let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
+            guard gr.length > 0 else { return }
+            var glyphPos = gr.location
+            while glyphPos < NSMaxRange(gr) {
+                var lineGlyphRange = NSRange()
+                let lineRect = self.lineFragmentRect(forGlyphAt: glyphPos, effectiveRange: &lineGlyphRange)
+                                   .offsetBy(dx: origin.x, dy: origin.y)
+                // Find x-span of | chars in this row to bound the horizontal lines
+                let lcr = self.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+                var minX: CGFloat = .infinity, maxX: CGFloat = -.infinity
+                storage.enumerateAttribute(.markdownTablePipe, in: lcr, options: []) { pv, pr, _ in
+                    guard pv != nil else { return }
+                    let pgr = self.glyphRange(forCharacterRange: pr, actualCharacterRange: nil)
+                    guard pgr.length > 0 else { return }
+                    let px = floor(lineRect.minX + self.location(forGlyphAt: pgr.location).x) + 0.5
+                    if px < minX { minX = px }
+                    if px > maxX { maxX = px }
+                }
+                if minX != .infinity {
+                    NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
+                    for y in [floor(lineRect.minY) + 0.5, floor(lineRect.maxY) - 0.5] {
+                        let p = NSBezierPath(); p.lineWidth = 0.5
+                        p.move(to: NSPoint(x: minX, y: y))
+                        p.line(to: NSPoint(x: maxX, y: y))
+                        p.stroke()
+                    }
+                }
+                glyphPos = NSMaxRange(lineGlyphRange)
             }
         }
     }
@@ -284,76 +337,109 @@ class EditorCoordinator: NSObject {
 
     private func applyTables(to range: NSRange, storage: NSTextStorage) {
         let ns = storage.string as NSString
-        let boldTableFont = NSFontManager.shared.convert(Styles.tableFont, toHaveTrait: .boldFontMask)
-        let border     = NSColor.separatorColor.withAlphaComponent(0.45)
-        let bodyBorder = NSColor.separatorColor.withAlphaComponent(0.2)
+        let font = Styles.tableFont
+        // In a monospace font every glyph has the same advance width; measure one char.
+        let charWidth = ("W" as NSString).size(withAttributes: [.font: font]).width
 
-        Patterns.tableSeparator.enumerateMatches(in: storage.string, options: [], range: range) { m, _, _ in
-            guard let m else { return }
-            let sepRange = m.range
+        var pos = range.location
+        while pos < NSMaxRange(range) {
+            let firstLine = ns.lineRange(for: NSRange(location: pos, length: 0))
+            let trimmed = ns.substring(with: firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("|") && trimmed.hasSuffix("|") else {
+                pos = NSMaxRange(firstLine); continue
+            }
 
-            // Collapse the |---|---| separator row to near-zero height, invisible text
-            storage.addAttribute(.foregroundColor, value: NSColor.clear, range: sepRange)
-            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 0.01), range: sepRange)
-            storage.addAttribute(.paragraphStyle, value: Styles.collapsedRowParagraphStyle, range: sepRange)
+            // Collect all consecutive table rows into a block
+            var rows: [(lineRange: NSRange, cells: [NSRange])] = []
+            var scanPos = pos
+            while scanPos < NSMaxRange(range) {
+                let lr = ns.lineRange(for: NSRange(location: scanPos, length: 0))
+                let t  = ns.substring(with: lr).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard t.hasPrefix("|") && t.hasSuffix("|") else { break }
 
-            // ── Header row (line immediately before separator) ────────────
-            guard sepRange.location > 0 else { return }
-            let headerRange = ns.lineRange(for: NSRange(location: sepRange.location - 1, length: 0))
-            guard headerRange.length > 0 else { return }
-
-            let headerBlock = NSTextBlock()
-            headerBlock.backgroundColor = (NSColor(white: 1, alpha: 0.07))
-            // Top edge = table outer border
-            headerBlock.setBorderColor(border, for: .minY)
-            headerBlock.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .minY)
-            // Bottom edge = header/body divider (heavier)
-            headerBlock.setBorderColor(border, for: .maxY)
-            headerBlock.setWidth(1.5, type: .absoluteValueType, for: .border, edge: .maxY)
-            // Vertical padding so text doesn't sit flush against the border
-            headerBlock.setWidth(5, type: .absoluteValueType, for: .padding, edge: .minY)
-            headerBlock.setWidth(5, type: .absoluteValueType, for: .padding, edge: .maxY)
-
-            let headerPS = NSMutableParagraphStyle()
-            headerPS.textBlocks = [headerBlock]
-            storage.addAttribute(.font, value: boldTableFont, range: headerRange)
-            storage.addAttribute(.paragraphStyle, value: headerPS, range: headerRange)
-
-            // ── Body rows ─────────────────────────────────────────────────
-            var rowIndex = 0
-            var pos = NSMaxRange(sepRange)
-            while pos < storage.length {
-                let lineRange = ns.lineRange(for: NSRange(location: pos, length: 0))
-                let trimmed = ns.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard trimmed.hasPrefix("|") else { break }
-
-                let bodyBlock = NSTextBlock()
-                if rowIndex % 2 == 1 {
-                    bodyBlock.backgroundColor = (NSColor(white: 1, alpha: 0.04))
+                // Find all | positions in this line to extract cell ranges
+                var pipes: [Int] = []
+                for i in lr.location..<NSMaxRange(lr) {
+                    if ns.character(at: i) == 0x7C { pipes.append(i) }
                 }
-                // Bottom border as row separator; last row closes the table box
-                bodyBlock.setBorderColor(bodyBorder, for: .maxY)
-                bodyBlock.setWidth(0.5, type: .absoluteValueType, for: .border, edge: .maxY)
-                bodyBlock.setWidth(4, type: .absoluteValueType, for: .padding, edge: .minY)
-                bodyBlock.setWidth(4, type: .absoluteValueType, for: .padding, edge: .maxY)
-
-                let bodyPS = NSMutableParagraphStyle()
-                bodyPS.textBlocks = [bodyBlock]
-                storage.addAttribute(.font, value: Styles.tableFont, range: lineRange)
-                storage.addAttribute(.paragraphStyle, value: bodyPS, range: lineRange)
-
-                rowIndex += 1
-                pos = NSMaxRange(lineRange)
+                var cells: [NSRange] = []
+                for i in 0..<max(0, pipes.count - 1) {
+                    let s = pipes[i] + 1, e = pipes[i + 1]
+                    if e > s { cells.append(NSRange(location: s, length: e - s)) }
+                }
+                rows.append((lineRange: lr, cells: cells))
+                scanPos = NSMaxRange(lr)
             }
-        }
 
-        // Style | as visible column dividers across all table rows
-        Patterns.tableRow.enumerateMatches(in: storage.string, options: [], range: range) { m, _, _ in
-            guard let m else { return }
-            Patterns.pipe.enumerateMatches(in: storage.string, options: [], range: m.range) { pm, _, _ in
-                guard let pm else { return }
-                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: pm.range)
+            // Identify header (row 0) and separator (row 1 if it only contains - : |)
+            let boldFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+            var separatorIndex: Int? = nil
+            if rows.count >= 2 {
+                let sepLine = ns.substring(with: rows[1].lineRange)
+                if sepLine.unicodeScalars.allSatisfy({ "-:| \t\r\n".unicodeScalars.contains($0) }) {
+                    separatorIndex = 1
+                }
             }
+
+            // Apply monospace font (bold for header) and collapse the separator row
+            for (idx, row) in rows.enumerated() {
+                if idx == separatorIndex {
+                    // Collapse |---|---| to near-zero height — lineRange includes \n so the
+                    // paragraph style actually takes effect
+                    storage.addAttribute(.foregroundColor, value: NSColor.clear,                    range: row.lineRange)
+                    storage.addAttribute(.font,            value: NSFont.systemFont(ofSize: 0.01),  range: row.lineRange)
+                    storage.addAttribute(.paragraphStyle,  value: Styles.collapsedRowParagraphStyle, range: row.lineRange)
+                } else {
+                    let f = idx == 0 ? boldFont : font
+                    storage.addAttribute(.font, value: f, range: row.lineRange)
+                }
+            }
+
+            // Compute max cell width (in chars) per column — skip separator row
+            let visibleRows = rows.indices.filter { $0 != separatorIndex }.map { rows[$0] }
+            let colCount = visibleRows.map { $0.cells.count }.max() ?? 0
+            var maxWidths = [Int](repeating: 0, count: colCount)
+            for row in visibleRows {
+                for (i, cell) in row.cells.enumerated() where i < colCount {
+                    maxWidths[i] = max(maxWidths[i], cell.length)
+                }
+            }
+
+            // Pad shorter cells with kern on their last character so columns align
+            for row in visibleRows {
+                for (i, cell) in row.cells.enumerated() where i < colCount {
+                    let pad = maxWidths[i] - cell.length
+                    guard pad > 0, cell.length > 0 else { continue }
+                    let lastChar = NSRange(location: NSMaxRange(cell) - 1, length: 1)
+                    storage.addAttribute(.kern, value: CGFloat(pad) * charWidth as NSNumber, range: lastChar)
+                }
+            }
+
+            // Apply uniform paragraph spacing so all rows (including last) have identical padding
+            let tablePS = NSMutableParagraphStyle()
+            tablePS.paragraphSpacing = 4
+            tablePS.paragraphSpacingBefore = 0
+            tablePS.lineSpacing = 0
+            for row in visibleRows {
+                storage.addAttribute(.paragraphStyle, value: tablePS, range: row.lineRange)
+            }
+
+            // Tag visible rows so MarkdownLayoutManager draws top + bottom border lines
+            for row in visibleRows {
+                storage.addAttribute(.markdownTableRow, value: true, range: row.lineRange)
+            }
+
+            // Hide | chars and tag them for vertical line drawing
+            for row in visibleRows {
+                for i in row.lineRange.location..<NSMaxRange(row.lineRange) {
+                    guard ns.character(at: i) == 0x7C else { continue }
+                    let r = NSRange(location: i, length: 1)
+                    storage.addAttribute(.foregroundColor,    value: NSColor.clear, range: r)
+                    storage.addAttribute(.markdownTablePipe,  value: true,          range: r)
+                }
+            }
+
+            pos = scanPos
         }
     }
 }
@@ -381,18 +467,20 @@ extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
         guard len > 0 else { return }
 
         let paraRange = (textStorage.string as NSString).paragraphRange(for: editedRange)
+        let full = NSRange(location: 0, length: textStorage.length)
         textStorage.beginEditing()
         applyBase(to: paraRange, storage: textStorage)
         applyInline(to: paraRange, storage: textStorage)
+        // Apply tables immediately so pipes/separator never flash as raw text while typing
+        if textStorage.string.contains("|") { applyTables(to: full, storage: textStorage) }
         textStorage.endEditing()
 
         fullScanWorkItem?.cancel()
         let item = DispatchWorkItem { [weak textStorage] in
             guard let ts = textStorage, ts.length > 0 else { return }
-            let full = NSRange(location: 0, length: ts.length)
+            let docFull = NSRange(location: 0, length: ts.length)
             ts.beginEditing()
-            if ts.string.contains("```") { self.applyFenced(to: full, storage: ts) }
-            if ts.string.contains("|")   { self.applyTables(to: full, storage: ts) }
+            if ts.string.contains("```") { self.applyFenced(to: docFull, storage: ts) }
             ts.endEditing()
         }
         fullScanWorkItem = item
