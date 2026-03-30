@@ -94,6 +94,7 @@ final class AppState: ObservableObject {
     @Published var isSearchFocused: Bool = false
     @Published var errorMessage: String? = nil
     @Published var externalEditConflict: ExternalEditConflict? = nil
+    @Published var isRawMode: Bool = false
 
     private var saveWorkItem: DispatchWorkItem?
     private var lastSavedText: String? = nil
@@ -467,6 +468,13 @@ struct MarkLensApp: App {
                 Button("Find…") { appState.isSearchFocused = true }
                     .keyboardShortcut("k", modifiers: .command)
                     .disabled(appState.selectedFileURL == nil)
+            }
+            CommandGroup(after: .toolbar) {
+                Button(appState.isRawMode ? "Show Rendered Markdown" : "Show Raw Markdown") {
+                    appState.isRawMode.toggle()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(appState.selectedFileURL == nil)
             }
         }
     }
