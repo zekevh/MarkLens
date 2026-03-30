@@ -92,17 +92,19 @@ final class MarkdownLayoutManager: NSLayoutManager {
             path.stroke()
         }
 
-        // Draw top + bottom border lines for each table row, bounded by the outer pipes
+        // Draw horizontal borders for each table row, bounded by the outer pipes.
+        // Top border only on the first row; all rows get a bottom border — avoids
+        // drawing two lines between adjacent rows.
         storage.enumerateAttribute(.markdownTableRow, in: charRange, options: []) { val, rng, _ in
             guard val != nil else { return }
             let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
             var glyphPos = gr.location
+            var isFirstRow = true
             while glyphPos < NSMaxRange(gr) {
                 var lineGlyphRange = NSRange()
                 let lineRect = self.lineFragmentRect(forGlyphAt: glyphPos, effectiveRange: &lineGlyphRange)
                                    .offsetBy(dx: origin.x, dy: origin.y)
-                // Find x-span of | chars in this row to bound the horizontal lines
                 let lcr = self.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
                 var minX: CGFloat = .infinity, maxX: CGFloat = -.infinity
                 storage.enumerateAttribute(.markdownTablePipe, in: lcr, options: []) { pv, pr, _ in
@@ -115,12 +117,15 @@ final class MarkdownLayoutManager: NSLayoutManager {
                 }
                 if minX != .infinity {
                     NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
-                    for y in [floor(lineRect.minY) + 0.5, floor(lineRect.maxY) - 0.5] {
+                    var ys: [CGFloat] = [floor(lineRect.maxY) - 0.5]
+                    if isFirstRow { ys.insert(floor(lineRect.minY) + 0.5, at: 0) }
+                    for y in ys {
                         let p = NSBezierPath(); p.lineWidth = 0.5
                         p.move(to: NSPoint(x: minX, y: y))
                         p.line(to: NSPoint(x: maxX, y: y))
                         p.stroke()
                     }
+                    isFirstRow = false
                 }
                 glyphPos = NSMaxRange(lineGlyphRange)
             }
@@ -381,32 +386,23 @@ class EditorCoordinator: NSObject {
                 }
             }
 
-            // Apply monospace font (bold for header) and collapse the separator row
+            // Apply monospace font to all rows (bold for header)
             for (idx, row) in rows.enumerated() {
-                if idx == separatorIndex {
-                    // Collapse |---|---| to near-zero height — lineRange includes \n so the
-                    // paragraph style actually takes effect
-                    storage.addAttribute(.foregroundColor, value: NSColor.clear,                    range: row.lineRange)
-                    storage.addAttribute(.font,            value: NSFont.systemFont(ofSize: 0.01),  range: row.lineRange)
-                    storage.addAttribute(.paragraphStyle,  value: Styles.collapsedRowParagraphStyle, range: row.lineRange)
-                } else {
-                    let f = idx == 0 ? boldFont : font
-                    storage.addAttribute(.font, value: f, range: row.lineRange)
-                }
+                storage.addAttribute(.font, value: idx == 0 ? boldFont : font, range: row.lineRange)
             }
 
-            // Compute max cell width (in chars) per column — skip separator row
-            let visibleRows = rows.indices.filter { $0 != separatorIndex }.map { rows[$0] }
-            let colCount = visibleRows.map { $0.cells.count }.max() ?? 0
+            // Compute max cell width per column (exclude separator — its --- cells are short)
+            let contentRows = rows.indices.filter { $0 != separatorIndex }.map { rows[$0] }
+            let colCount = contentRows.map { $0.cells.count }.max() ?? 0
             var maxWidths = [Int](repeating: 0, count: colCount)
-            for row in visibleRows {
+            for row in contentRows {
                 for (i, cell) in row.cells.enumerated() where i < colCount {
                     maxWidths[i] = max(maxWidths[i], cell.length)
                 }
             }
 
-            // Pad shorter cells with kern on their last character so columns align
-            for row in visibleRows {
+            // Right-pad content rows so columns align
+            for row in contentRows {
                 for (i, cell) in row.cells.enumerated() where i < colCount {
                     let pad = maxWidths[i] - cell.length
                     guard pad > 0, cell.length > 0 else { continue }
@@ -415,27 +411,41 @@ class EditorCoordinator: NSObject {
                 }
             }
 
-            // Apply uniform paragraph spacing so all rows (including last) have identical padding
+            // Center-pad separator cells: split the extra width equally left and right
+            if let si = separatorIndex, si < rows.count {
+                for (i, cell) in rows[si].cells.enumerated() where i < colCount {
+                    let total = maxWidths[i] - cell.length
+                    guard total > 0, cell.length > 0 else { continue }
+                    let leftPad  = total / 2
+                    let rightPad = total - leftPad
+                    if leftPad > 0 {
+                        let firstChar = NSRange(location: cell.location, length: 1)
+                        storage.addAttribute(.kern, value: CGFloat(leftPad) * charWidth as NSNumber, range: firstChar)
+                    }
+                    if rightPad > 0 {
+                        let lastChar = NSRange(location: NSMaxRange(cell) - 1, length: 1)
+                        storage.addAttribute(.kern, value: CGFloat(rightPad) * charWidth as NSNumber, range: lastChar)
+                    }
+                }
+            }
+
+            // Uniform paragraph spacing for all rows (prevents last-row spacing drift)
             let tablePS = NSMutableParagraphStyle()
-            tablePS.paragraphSpacing = 4
+            tablePS.paragraphSpacing     = 4
             tablePS.paragraphSpacingBefore = 0
-            tablePS.lineSpacing = 0
-            for row in visibleRows {
+            tablePS.lineSpacing          = 0
+            for row in rows {
                 storage.addAttribute(.paragraphStyle, value: tablePS, range: row.lineRange)
             }
 
-            // Tag visible rows so MarkdownLayoutManager draws top + bottom border lines
-            for row in visibleRows {
+            // Tag all rows for top + bottom border drawing; hide | chars for vertical line drawing
+            for row in rows {
                 storage.addAttribute(.markdownTableRow, value: true, range: row.lineRange)
-            }
-
-            // Hide | chars and tag them for vertical line drawing
-            for row in visibleRows {
                 for i in row.lineRange.location..<NSMaxRange(row.lineRange) {
                     guard ns.character(at: i) == 0x7C else { continue }
                     let r = NSRange(location: i, length: 1)
-                    storage.addAttribute(.foregroundColor,    value: NSColor.clear, range: r)
-                    storage.addAttribute(.markdownTablePipe,  value: true,          range: r)
+                    storage.addAttribute(.foregroundColor,   value: NSColor.clear, range: r)
+                    storage.addAttribute(.markdownTablePipe, value: true,          range: r)
                 }
             }
 
