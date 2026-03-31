@@ -26,6 +26,9 @@ final class BlockRegistry: ObservableObject {
         store.compactMap { id, ref in ref.value.map { (id, $0) } }
     }
 
+    /// Called by each BlockNSTextView.mouseDragged — routes cross-block detection to NodeEditorView.
+    var onCrossBlockDrag: ((UUID, CGFloat) -> Void)?
+
     func register(_ tv: NSTextView, id: UUID) {
         let ref = WeakRef(); ref.value = tv
         store[id] = ref
@@ -233,45 +236,13 @@ struct NodeEditorView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
-            NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak manager] event in
+            NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak manager] event in
                 guard let manager else { return event }
 
                 switch event.type {
                 case .leftMouseDown:
                     manager.allBlocksSelected = false
                     manager.crossSelectedIDs = []
-                    return event
-
-                case .leftMouseUp:
-                    manager.crossSelectedIDs = []
-                    return event
-
-                case .leftMouseDragged:
-                    guard let window = NSApp.keyWindow,
-                          let anchorTV = window.firstResponder as? BlockNSTextView else {
-                        if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
-                        return event
-                    }
-                    let mouseY = event.locationInWindow.y
-                    let anchorFrame = anchorTV.convert(anchorTV.bounds, to: nil)
-                    // Within anchor bounds — normal within-block drag
-                    if mouseY >= anchorFrame.minY && mouseY <= anchorFrame.maxY {
-                        if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
-                        return event
-                    }
-                    // Cross-block drag: find which blocks fall between anchor and mouse
-                    let goingDown = mouseY < anchorFrame.minY
-                    var crossIDs = Set<UUID>()
-                    for (id, tv) in manager.registry.allRegistered() {
-                        guard id != anchorTV.blockID else { continue }
-                        let f = tv.convert(tv.bounds, to: nil)
-                        if goingDown {
-                            if f.maxY <= anchorFrame.minY && f.minY >= mouseY { crossIDs.insert(id) }
-                        } else {
-                            if f.minY >= anchorFrame.maxY && f.maxY <= mouseY { crossIDs.insert(id) }
-                        }
-                    }
-                    manager.crossSelectedIDs = crossIDs
                     return event
 
                 default: // .keyDown
@@ -288,28 +259,34 @@ struct NodeEditorView: View {
                         NSApp.keyWindow?.makeFirstResponder(nil)
                         return nil
                     }
-                    // Cmd+C: copy selected content
+                    // Cmd+C: copy selected content in document order
                     if flags == .command && ch == "c" {
                         if manager.allBlocksSelected {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(serializeMarkdownBlocks(manager.blocks), forType: .string)
                             return nil
                         }
-                        if !manager.crossSelectedIDs.isEmpty {
+                        if !manager.crossSelectedIDs.isEmpty,
+                           let anchorTV = NSApp.keyWindow?.firstResponder as? BlockNSTextView {
+                            let anchorID = anchorTV.blockID
+                            let sel = anchorTV.selectedRange()
+                            let anchorText = sel.length > 0
+                                ? (anchorTV.string as NSString).substring(with: sel)
+                                : anchorTV.string
                             var parts: [String] = []
-                            if let anchorTV = NSApp.keyWindow?.firstResponder as? NSTextView {
-                                let sel = anchorTV.selectedRange()
-                                if sel.length > 0 { parts.append((anchorTV.string as NSString).substring(with: sel)) }
-                            }
-                            for block in manager.blocks where manager.crossSelectedIDs.contains(block.id) {
-                                parts.append(block.content)
+                            for block in manager.blocks {
+                                if block.id == anchorID {
+                                    parts.append(anchorText)
+                                } else if manager.crossSelectedIDs.contains(block.id) {
+                                    parts.append(block.content)
+                                }
                             }
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(parts.joined(separator: "\n"), forType: .string)
                             return nil
                         }
                     }
-                    // Any other key dismisses all-blocks selection
+                    // Any other key dismisses the cross-block / all-blocks selection
                     if manager.allBlocksSelected { manager.allBlocksSelected = false }
                     if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
                     return event
@@ -319,6 +296,35 @@ struct NodeEditorView: View {
         .onAppear {
             manager.undoManager = undoManager
             manager.load(from: text)
+            // Route mouseDragged events from each BlockNSTextView to the cross-block
+            // detection logic here. NSTextView's internal drag-select loop calls
+            // mouseDragged(with:) directly, which is why this is more reliable than
+            // an NSEvent local monitor (which misses events consumed by nextEvent()).
+            manager.registry.onCrossBlockDrag = { [weak manager] anchorID, mouseY in
+                guard let manager else { return }
+                let registered = manager.registry.allRegistered()
+                guard let anchorTV = registered.first(where: { $0.0 == anchorID })?.1 else { return }
+                let anchorFrame = anchorTV.convert(anchorTV.bounds, to: nil)
+                // Mouse returned inside anchor bounds — cancel cross-block highlight
+                guard mouseY < anchorFrame.minY || mouseY > anchorFrame.maxY else {
+                    if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
+                    return
+                }
+                let goingDown = mouseY < anchorFrame.minY
+                var crossIDs = Set<UUID>()
+                for (id, tv) in registered {
+                    guard id != anchorID else { continue }
+                    let f = tv.convert(tv.bounds, to: nil)
+                    if goingDown {
+                        // Block is below anchor and its top edge is at or above mouse
+                        if f.maxY <= anchorFrame.minY && f.maxY >= mouseY { crossIDs.insert(id) }
+                    } else {
+                        // Block is above anchor and its bottom edge is at or below mouse
+                        if f.minY >= anchorFrame.maxY && f.minY <= mouseY { crossIDs.insert(id) }
+                    }
+                }
+                manager.crossSelectedIDs = crossIDs
+            }
         }
         .onChange(of: undoManager) { _, um in
             manager.undoManager = um
@@ -586,6 +592,7 @@ struct BlockEditorView: NSViewRepresentable {
 
         let textView = BlockNSTextView(frame: .zero, textContainer: container)
         textView.blockID = blockID
+        textView.registry = registry
         configureTextView(textView)
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
@@ -728,11 +735,38 @@ private final class BlockNSTextView: NSTextView {
     var onBackspaceAtStart: (() -> Void)?
     var onNavigatePrevious: ((CursorPlacement) -> Void)?
     var onNavigateNext:     ((CursorPlacement) -> Void)?
+    // Weak ref so mouseDragged can route cross-block events without a strong cycle.
+    weak var registry: BlockRegistry?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if toggleTaskCheckboxIfHit(at: point) { return }
-        super.mouseDown(with: event)
+
+        let anchorID = blockID
+        weak var weakRegistry = registry
+
+        // NSTextView.mouseDown runs a blocking run-loop using window.nextEvent(),
+        // which means mouseDragged(with:) is never called on this subclass during
+        // a drag-to-select gesture. Installing a Timer in .eventTracking mode is
+        // the only way to observe mouse position while that loop is active.
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { _ in
+            guard NSEvent.pressedMouseButtons & 1 == 1 else { return }
+            guard let window = NSApp.keyWindow else { return }
+            let winPt = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+            weakRegistry?.onCrossBlockDrag?(anchorID, winPt.y)
+        }
+        RunLoop.current.add(timer, forMode: .eventTracking)
+
+        super.mouseDown(with: event)   // blocks until mouse-up
+
+        timer.invalidate()
+    }
+
+    /// Fallback path: called when NSTextView uses normal event dispatch instead of
+    /// its blocking loop (e.g. some system configurations). Both paths are safe.
+    override func mouseDragged(with event: NSEvent) {
+        super.mouseDragged(with: event)
+        registry?.onCrossBlockDrag?(blockID, event.locationInWindow.y)
     }
 
     private func toggleTaskCheckboxIfHit(at point: NSPoint) -> Bool {
