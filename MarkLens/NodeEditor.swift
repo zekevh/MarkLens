@@ -330,6 +330,13 @@ struct NodeEditorView: View {
             guard serialized != text else { return }
             onTextChange(serialized)
         }
+        .onChange(of: text) { _, newText in
+            // Re-parse when the text is updated externally (e.g. silent reload or
+            // "Use Disk Version" — both set documentText without recreating this view).
+            let serialized = serializeMarkdownBlocks(manager.blocks)
+            guard newText != serialized else { return }
+            manager.load(from: newText)
+        }
     }
 }
 
