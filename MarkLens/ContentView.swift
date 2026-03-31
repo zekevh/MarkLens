@@ -19,7 +19,7 @@ struct ContentView: View {
                             onTextChange: { appState.saveCurrentFile(text: $0) }
                         )
                         .id(appState.selectedFileURL)
-                        .ignoresSafeArea()
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
                     } else {
                         NodeEditorView(
                             text: $appState.documentText,
@@ -28,14 +28,15 @@ struct ContentView: View {
                             onLinkClick: { appState.handleLinkClick($0) }
                         )
                         .id(appState.selectedFileURL)
-                        .ignoresSafeArea()
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
                     }
                 } else {
                     EmptyEditorView()
-                        .ignoresSafeArea()
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
                 }
             }
         }
+        .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { appState.createFile() }) {
