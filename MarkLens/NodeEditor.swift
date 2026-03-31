@@ -22,6 +22,10 @@ final class BlockRegistry: ObservableObject {
     private var pendingID: UUID?
     private var pendingPlacement: CursorPlacement = .start
 
+    func allRegistered() -> [(UUID, NSTextView)] {
+        store.compactMap { id, ref in ref.value.map { (id, $0) } }
+    }
+
     func register(_ tv: NSTextView, id: UUID) {
         let ref = WeakRef(); ref.value = tv
         store[id] = ref
@@ -72,6 +76,8 @@ final class BlockRegistry: ObservableObject {
 @MainActor
 final class BlocksManager: ObservableObject {
     @Published var blocks: [MarkdownBlock] = []
+    @Published var allBlocksSelected = false
+    @Published var crossSelectedIDs: Set<UUID> = []
     let registry = BlockRegistry()
 
     // Injected from SwiftUI environment — same instance NSTextView uses for within-block undo.
@@ -197,6 +203,7 @@ struct NodeEditorView: View {
                         searchText: searchText,
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
+                        isBlockSelected: manager.allBlocksSelected || manager.crossSelectedIDs.contains(block.id),
                         registry: manager.registry,
                         onSplitBlock:        { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
                         onMergeWithPrevious: { trailing   in manager.mergeWithPrevious(block.id, trailing: trailing) },
@@ -226,14 +233,87 @@ struct NodeEditorView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if flags == [.command, .shift],
-                   event.charactersIgnoringModifiers?.lowercased() == "d" {
-                    debugBlocks.toggle()
-                    return nil
+            NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak manager] event in
+                guard let manager else { return event }
+
+                switch event.type {
+                case .leftMouseDown:
+                    manager.allBlocksSelected = false
+                    manager.crossSelectedIDs = []
+                    return event
+
+                case .leftMouseUp:
+                    manager.crossSelectedIDs = []
+                    return event
+
+                case .leftMouseDragged:
+                    guard let window = NSApp.keyWindow,
+                          let anchorTV = window.firstResponder as? BlockNSTextView else {
+                        if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
+                        return event
+                    }
+                    let mouseY = event.locationInWindow.y
+                    let anchorFrame = anchorTV.convert(anchorTV.bounds, to: nil)
+                    // Within anchor bounds — normal within-block drag
+                    if mouseY >= anchorFrame.minY && mouseY <= anchorFrame.maxY {
+                        if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
+                        return event
+                    }
+                    // Cross-block drag: find which blocks fall between anchor and mouse
+                    let goingDown = mouseY < anchorFrame.minY
+                    var crossIDs = Set<UUID>()
+                    for (id, tv) in manager.registry.allRegistered() {
+                        guard id != anchorTV.blockID else { continue }
+                        let f = tv.convert(tv.bounds, to: nil)
+                        if goingDown {
+                            if f.maxY <= anchorFrame.minY && f.minY >= mouseY { crossIDs.insert(id) }
+                        } else {
+                            if f.minY >= anchorFrame.maxY && f.maxY <= mouseY { crossIDs.insert(id) }
+                        }
+                    }
+                    manager.crossSelectedIDs = crossIDs
+                    return event
+
+                default: // .keyDown
+                    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    let ch = event.charactersIgnoringModifiers?.lowercased()
+                    // Cmd+Shift+D: debug overlay
+                    if flags == [.command, .shift] && ch == "d" {
+                        debugBlocks.toggle()
+                        return nil
+                    }
+                    // Cmd+A: select all blocks immediately
+                    if flags == .command && ch == "a" {
+                        manager.allBlocksSelected = true
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        return nil
+                    }
+                    // Cmd+C: copy selected content
+                    if flags == .command && ch == "c" {
+                        if manager.allBlocksSelected {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(serializeMarkdownBlocks(manager.blocks), forType: .string)
+                            return nil
+                        }
+                        if !manager.crossSelectedIDs.isEmpty {
+                            var parts: [String] = []
+                            if let anchorTV = NSApp.keyWindow?.firstResponder as? NSTextView {
+                                let sel = anchorTV.selectedRange()
+                                if sel.length > 0 { parts.append((anchorTV.string as NSString).substring(with: sel)) }
+                            }
+                            for block in manager.blocks where manager.crossSelectedIDs.contains(block.id) {
+                                parts.append(block.content)
+                            }
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(parts.joined(separator: "\n"), forType: .string)
+                            return nil
+                        }
+                    }
+                    // Any other key dismisses all-blocks selection
+                    if manager.allBlocksSelected { manager.allBlocksSelected = false }
+                    if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
+                    return event
                 }
-                return event
             }
         }
         .onAppear {
@@ -293,6 +373,7 @@ struct BlockRowView: View {
     var searchText: String
     var isDropTarget: Bool
     var debugBlocks: Bool
+    var isBlockSelected: Bool
     var registry: BlockRegistry
     var onSplitBlock: (String, Int, String?, String?, Int?) -> Void
     var onMergeWithPrevious: (String) -> Void
@@ -334,6 +415,13 @@ struct BlockRowView: View {
                 Rectangle()
                     .fill(Color.accentColor)
                     .frame(height: 2)
+            }
+        }
+        .overlay {
+            if isBlockSelected {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.accentColor.opacity(0.15))
+                    .allowsHitTesting(false)
             }
         }
         .overlay {
@@ -489,6 +577,7 @@ struct BlockEditorView: NSViewRepresentable {
         storage.addLayoutManager(layout)
 
         let textView = BlockNSTextView(frame: .zero, textContainer: container)
+        textView.blockID = blockID
         configureTextView(textView)
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
@@ -626,6 +715,7 @@ struct BlockEditorView: NSViewRepresentable {
 // MARK: - BlockNSTextView
 
 private final class BlockNSTextView: NSTextView {
+    var blockID: UUID = UUID()
     var onEnter: (() -> Void)?
     var onBackspaceAtStart: (() -> Void)?
     var onNavigatePrevious: ((CursorPlacement) -> Void)?
