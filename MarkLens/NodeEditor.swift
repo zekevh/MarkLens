@@ -324,10 +324,11 @@ struct NodeEditorView: View {
             manager.undoManager = um
         }
         .onChange(of: manager.blocks) { _, newBlocks in
-            // Only write to disk — don't mutate the binding mid-update
-            // (documentText stays stale while editing; file switch via .id() re-parses)
             let serialized = serializeMarkdownBlocks(newBlocks)
             guard serialized != text else { return }
+            // Keep documentText in sync so reloadIfChangedOnDisk can correctly
+            // detect whether there are real unsaved edits vs. a clean state.
+            text = serialized
             onTextChange(serialized)
         }
         .onChange(of: text) { _, newText in
