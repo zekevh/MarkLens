@@ -58,6 +58,54 @@ final class FileWatcher {
     }
 }
 
+// MARK: - FolderWatcher
+// Watches a set of directories with kqueue and fires a debounced callback when
+// any of them changes (file created, deleted, or renamed inside them).
+
+@MainActor
+final class FolderWatcher {
+    private var sources: [URL: DispatchSourceFileSystemObject] = [:]
+    private var debounceWork: DispatchWorkItem?
+    private var handler: (() -> Void)?
+
+    func watch(directories: [URL], onChange: @escaping () -> Void) {
+        handler = onChange
+        let newSet = Set(directories)
+        let oldSet = Set(sources.keys)
+
+        for url in oldSet.subtracting(newSet) {
+            sources[url]?.cancel()
+            sources.removeValue(forKey: url)
+        }
+        for url in newSet.subtracting(oldSet) {
+            let fd = open(url.path, O_EVTONLY)
+            guard fd != -1 else { continue }
+            let src = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main
+            )
+            src.setEventHandler { [weak self] in self?.schedule() }
+            src.setCancelHandler { close(fd) }
+            src.resume()
+            sources[url] = src
+        }
+    }
+
+    func stopAll() {
+        debounceWork?.cancel()
+        debounceWork = nil
+        sources.values.forEach { $0.cancel() }
+        sources.removeAll()
+        handler = nil
+    }
+
+    private func schedule() {
+        debounceWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.handler?() }
+        debounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+}
+
 // MARK: - FileNode
 
 struct FileNode: Identifiable, Hashable {
@@ -100,8 +148,32 @@ final class AppState: ObservableObject {
     private var lastSavedText: String? = nil
     private var recentBookmarks: [String: Data] = [:]   // url.path → security-scoped bookmark
     private let fileWatcher = FileWatcher()
+    let folderWatcher = FolderWatcher()
 
     var rootFolderURL: URL?
+
+    // MARK: Tree helpers
+
+    /// Rebuild rootNodes from disk and refresh directory watches.
+    private func rebuildTree() {
+        guard let folder = rootFolderURL else { return }
+        rootNodes = buildTree(at: folder)
+        refreshFolderWatch()
+    }
+
+    /// Update directory watches to match every directory currently in the tree.
+    private func refreshFolderWatch() {
+        guard let folder = rootFolderURL else { folderWatcher.stopAll(); return }
+        let dirs = [folder] + collectDirectories(from: rootNodes)
+        folderWatcher.watch(directories: dirs) { [weak self] in self?.rebuildTree() }
+    }
+
+    private func collectDirectories(from nodes: [FileNode]) -> [URL] {
+        nodes.flatMap { node -> [URL] in
+            guard node.isDirectory else { return [] }
+            return [node.url] + collectDirectories(from: node.children ?? [])
+        }
+    }
 
     // MARK: File loading
 
@@ -252,6 +324,7 @@ final class AppState: ObservableObject {
         saveWorkItem?.cancel()
         saveWorkItem = nil
         fileWatcher.stop()
+        folderWatcher.stopAll()
         rootFolderURL = nil
         rootNodes = []
         selectedFileURL = nil
@@ -274,8 +347,8 @@ final class AppState: ObservableObject {
             errorMessage = "Could not create \"\(url.lastPathComponent)\". Check folder permissions."
             return
         }
-        if let folder = rootFolderURL {
-            rootNodes = buildTree(at: folder)
+        if rootFolderURL != nil {
+            rebuildTree()
         } else {
             rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
         }
@@ -292,7 +365,7 @@ final class AppState: ObservableObject {
         panel.prompt = "Open Folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         rootFolderURL = url
-        rootNodes = buildTree(at: url)
+        rebuildTree()
         if let first = firstFile(in: rootNodes) {
             loadFile(first.url)
         }
@@ -310,6 +383,7 @@ final class AppState: ObservableObject {
         panel.prompt = "Open"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         rootFolderURL = nil
+        folderWatcher.stopAll()
         rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
         loadFile(url)
     }
@@ -356,7 +430,7 @@ final class AppState: ObservableObject {
         let key = url.absoluteString
         if pinnedURLs.contains(key) { pinnedURLs.remove(key) } else { pinnedURLs.insert(key) }
         UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
-        if let folder = rootFolderURL { rootNodes = buildTree(at: folder) }
+        rebuildTree()
     }
 
     func deleteFile(_ url: URL) {
@@ -367,8 +441,8 @@ final class AppState: ObservableObject {
             return
         }
         if selectedFileURL == url { selectedFileURL = nil; documentText = "" }
-        if let folder = rootFolderURL {
-            rootNodes = buildTree(at: folder)
+        if rootFolderURL != nil {
+            rebuildTree()
         } else {
             rootNodes = rootNodes.filter { $0.url != url }
         }
@@ -396,8 +470,8 @@ final class AppState: ObservableObject {
             recentBookmarks.removeValue(forKey: url.path)
             recordRecent(newURL)
         }
-        if let folder = rootFolderURL {
-            rootNodes = buildTree(at: folder)
+        if rootFolderURL != nil {
+            rebuildTree()
         } else {
             rootNodes = rootNodes.map { node in
                 node.url == url
@@ -446,6 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor private func open(_ url: URL) {
         guard !url.hasDirectoryPath,
               FileManager.default.fileExists(atPath: url.path) else { return }
+        appState?.folderWatcher.stopAll()
         appState?.rootFolderURL = nil
         appState?.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
         appState?.loadFile(url)
