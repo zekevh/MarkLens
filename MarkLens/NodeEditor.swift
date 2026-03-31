@@ -957,6 +957,23 @@ private final class BlockNSTextView: NSTextView {
         case 51:                                         // Backspace
             let r = selectedRange()
             if r.location == 0 && r.length == 0 { onBackspaceAtStart?(); return }
+            // Paired deletion: if the cursor sits between an auto-paired opener/closer
+            // (e.g. [|] or `|`), delete both characters at once.
+            if r.length == 0, r.location > 0, r.location < string.count {
+                let ns   = string as NSString
+                let prev = ns.substring(with: NSRange(location: r.location - 1, length: 1))
+                let next = ns.substring(with: NSRange(location: r.location,     length: 1))
+                if (prev == "[" && next == "]") || (prev == "`" && next == "`")
+                    || (prev == "*" && next == "*") || (prev == "_" && next == "_") {
+                    let delRange = NSRange(location: r.location - 1, length: 2)
+                    if shouldChangeText(in: delRange, replacementString: "") {
+                        replaceCharacters(in: delRange, with: "")
+                        didChangeText()
+                        setSelectedRange(NSRange(location: r.location - 1, length: 0))
+                    }
+                    return
+                }
+            }
         case 123 where !modified:                        // Left arrow
             if selectedRange().location == 0 && selectedRange().length == 0 {
                 onNavigatePrevious?(.end); return
@@ -1060,6 +1077,123 @@ extension BlockEditorCoordinator: @preconcurrency NSTextStorageDelegate {
 }
 
 extension BlockEditorCoordinator: NSTextViewDelegate {
+    // Prevent re-entrancy when we manually apply an auto-pair replacement.
+    private static var isApplyingAutoPair = false
+
+    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        guard !Self.isApplyingAutoPair, !isLoading else { return true }
+        guard let typed = replacementString, typed.count == 1 else { return true }
+        let ns = textView.string as NSString
+        let cursorPos = range.location
+        let prevChar  = cursorPos > 0            ? ns.substring(with: NSRange(location: cursorPos - 1, length: 1)) : ""
+        let prev2Char = cursorPos > 1            ? ns.substring(with: NSRange(location: cursorPos - 2, length: 1)) : ""
+        let nextChar  = cursorPos < ns.length    ? ns.substring(with: NSRange(location: cursorPos,     length: 1)) : ""
+
+        // ── Wrap a selection in delimiters ────────────────────────────────────
+        if range.length > 0 {
+            let (open, close): (String, String)
+            switch typed {
+            case "*": (open, close) = ("*",  "*")
+            case "`": (open, close) = ("`",  "`")
+            case "_": (open, close) = ("_",  "_")
+            case "[": (open, close) = ("[",  "]")
+            default:  return true
+            }
+            let sel = ns.substring(with: range)
+            applyAutoPair(in: textView, replace: range,
+                          with: open + sel + close,
+                          cursorAt: range.location + open.count + sel.count)
+            return false
+        }
+
+        switch typed {
+
+        // ── Star: * → *|* ────────────────────────────────────────────────────
+        // Same mechanic as `[` → `[|]`: the very first `*` auto-pairs immediately.
+        // If the cursor already sits before a closing `*`, skip over it instead.
+        // HR guard: if the line prefix is all `*` (e.g. user building `***`) skip
+        // auto-pairing to avoid creating `****` which matches the HR pattern.
+        case "*":
+            if prevChar == "*" && nextChar == "*" {
+                // Cursor is inside *|* — insert another * here and one after closing *
+                // i.e. expand *|* → **|**
+                applyAutoPair(in: textView,
+                              replace: range,
+                              with: "**", cursorAt: cursorPos + 1)
+                return false
+            }
+            // HR guard: avoid auto-pairing on otherwise-blank lines made of only `*`
+            let starLineRange = ns.lineRange(for: NSRange(location: cursorPos, length: 0))
+            let starPrefix = ns.substring(with: NSRange(location: starLineRange.location,
+                                                        length: cursorPos - starLineRange.location))
+                .trimmingCharacters(in: .whitespaces)
+            if !starPrefix.isEmpty && starPrefix.allSatisfy({ $0 == "*" }) { return true }
+            applyAutoPair(in: textView, replace: range, with: "**", cursorAt: cursorPos + 1)
+            return false
+
+        // ── Underscore: _ → _|_ ──────────────────────────────────────────────
+        case "_":
+            if prevChar == "_" && nextChar == "_" {
+                // Cursor is inside _|_ — expand to __|__
+                applyAutoPair(in: textView,
+                              replace: range,
+                              with: "__", cursorAt: cursorPos + 1)
+                return false
+            }
+            let usLineRange = ns.lineRange(for: NSRange(location: cursorPos, length: 0))
+            let usPrefix = ns.substring(with: NSRange(location: usLineRange.location,
+                                                      length: cursorPos - usLineRange.location))
+                .trimmingCharacters(in: .whitespaces)
+            if !usPrefix.isEmpty && usPrefix.allSatisfy({ $0 == "_" }) { return true }
+            applyAutoPair(in: textView, replace: range, with: "__", cursorAt: cursorPos + 1)
+            return false
+
+        // ── Inline code: ` → `|` ─────────────────────────────────────────────
+        // Single backtick auto-pairs. When the user is building `` ` `` → ` ``` `
+        // (prevChar already `` ` ``) we skip so the block-based code-fence can form.
+        case "`" where prevChar != "`":
+            if nextChar == "`" {
+                // Skip over the closing ` the user already inserted
+                applySkipOver(in: textView, to: cursorPos + 1)
+                return false
+            }
+            applyAutoPair(in: textView, replace: range,
+                          with: "``",
+                          cursorAt: cursorPos + 1)
+            return false
+
+        // ── Brackets: [ → [|] ────────────────────────────────────────────────
+        case "[":
+            applyAutoPair(in: textView, replace: range,
+                          with: "[]",
+                          cursorAt: cursorPos + 1)
+            return false
+
+        // ── Skip over matching closing delimiter ─────────────────────────────
+        // If the cursor is sitting right before the closing char we already
+        // auto-inserted, just glide past it instead of doubling it up.
+        case "]" where nextChar == "]",
+             ")" where nextChar == ")":
+            applySkipOver(in: textView, to: cursorPos + 1)
+            return false
+
+        default:
+            return true
+        }
+    }
+
+    private func applyAutoPair(in textView: NSTextView, replace range: NSRange,
+                               with text: String, cursorAt pos: Int) {
+        Self.isApplyingAutoPair = true
+        defer { Self.isApplyingAutoPair = false }
+        textView.insertText(text, replacementRange: range)
+        textView.setSelectedRange(NSRange(location: pos, length: 0))
+    }
+
+    private func applySkipOver(in textView: NSTextView, to pos: Int) {
+        textView.setSelectedRange(NSRange(location: pos, length: 0))
+    }
+
     func textDidChange(_ notification: Notification) {
         guard !isLoading, let tv = notification.object as? NSTextView else { return }
         onTextChange(tv.string)
