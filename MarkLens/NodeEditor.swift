@@ -81,6 +81,9 @@ final class BlocksManager: ObservableObject {
     @Published var blocks: [MarkdownBlock] = []
     @Published var allBlocksSelected = false
     @Published var crossSelectedIDs: Set<UUID> = []
+    // ID of the block currently under the cursor during a cross-block drag.
+    // Used for copy and to drive crossBlockSelectionRange on its NSTextView.
+    @Published var crossCursorID: UUID? = nil
     let registry = BlockRegistry()
 
     // Injected from SwiftUI environment — same instance NSTextView uses for within-block undo.
@@ -89,6 +92,16 @@ final class BlocksManager: ObservableObject {
     func load(from text: String) {
         let parsed = parseMarkdownBlocks(text)
         blocks = parsed.isEmpty ? [MarkdownBlock(content: "")] : parsed
+    }
+
+    /// Clears all cross-block selection state and wipes crossBlockSelectionRange
+    /// from every registered NSTextView so highlights don't linger.
+    func clearCrossBlockSelection() {
+        crossSelectedIDs = []
+        crossCursorID = nil
+        for (_, tv) in registry.allRegistered() {
+            (tv as? BlockNSTextView)?.crossBlockSelectionRange = nil
+        }
     }
 
     // MARK: Split (Enter)
@@ -206,7 +219,7 @@ struct NodeEditorView: View {
                         searchText: searchText,
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
-                        isBlockSelected: manager.allBlocksSelected || manager.crossSelectedIDs.contains(block.id),
+                        isBlockSelected: manager.allBlocksSelected,
                         registry: manager.registry,
                         onSplitBlock:        { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
                         onMergeWithPrevious: { trailing   in manager.mergeWithPrevious(block.id, trailing: trailing) },
@@ -242,7 +255,7 @@ struct NodeEditorView: View {
                 switch event.type {
                 case .leftMouseDown:
                     manager.allBlocksSelected = false
-                    manager.crossSelectedIDs = []
+                    manager.clearCrossBlockSelection()
                     return event
 
                 default: // .keyDown
@@ -266,19 +279,24 @@ struct NodeEditorView: View {
                             NSPasteboard.general.setString(serializeMarkdownBlocks(manager.blocks), forType: .string)
                             return nil
                         }
-                        if !manager.crossSelectedIDs.isEmpty,
+                        if !manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil,
                            let anchorTV = NSApp.keyWindow?.firstResponder as? BlockNSTextView {
                             let anchorID = anchorTV.blockID
                             let sel = anchorTV.selectedRange()
                             let anchorText = sel.length > 0
                                 ? (anchorTV.string as NSString).substring(with: sel)
                                 : anchorTV.string
+                            let registered = manager.registry.allRegistered()
                             var parts: [String] = []
                             for block in manager.blocks {
                                 if block.id == anchorID {
                                     parts.append(anchorText)
                                 } else if manager.crossSelectedIDs.contains(block.id) {
                                     parts.append(block.content)
+                                } else if block.id == manager.crossCursorID,
+                                          let tv = registered.first(where: { $0.0 == block.id })?.1 as? BlockNSTextView,
+                                          let range = tv.crossBlockSelectionRange, range.length > 0 {
+                                    parts.append((tv.string as NSString).substring(with: range))
                                 }
                             }
                             NSPasteboard.general.clearContents()
@@ -288,7 +306,9 @@ struct NodeEditorView: View {
                     }
                     // Any other key dismisses the cross-block / all-blocks selection
                     if manager.allBlocksSelected { manager.allBlocksSelected = false }
-                    if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
+                    if !manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil {
+                        manager.clearCrossBlockSelection()
+                    }
                     return event
                 }
             }
@@ -305,25 +325,68 @@ struct NodeEditorView: View {
                 let registered = manager.registry.allRegistered()
                 guard let anchorTV = registered.first(where: { $0.0 == anchorID })?.1 else { return }
                 let anchorFrame = anchorTV.convert(anchorTV.bounds, to: nil)
+
+                // Resolve char index in a text view at a given window-Y coordinate.
+                // Uses midX of the view as a stable horizontal probe point.
+                func charIndex(in tv: NSTextView, windowY: CGFloat) -> Int {
+                    guard let lm = tv.layoutManager, let tc = tv.textContainer else { return 0 }
+                    let viewPt = tv.convert(NSPoint(x: tv.bounds.midX, y: windowY), from: nil)
+                    let tcPt = NSPoint(x: viewPt.x - tv.textContainerOrigin.x,
+                                      y: viewPt.y - tv.textContainerOrigin.y)
+                    let glyphIdx = lm.glyphIndex(for: tcPt, in: tc, fractionOfDistanceThroughGlyph: nil)
+                    return lm.characterIndexForGlyph(at: glyphIdx)
+                }
+
                 // Mouse returned inside anchor bounds — cancel cross-block highlight
                 guard mouseY < anchorFrame.minY || mouseY > anchorFrame.maxY else {
-                    if !manager.crossSelectedIDs.isEmpty { manager.crossSelectedIDs = [] }
+                    manager.clearCrossBlockSelection()
                     return
                 }
                 let goingDown = mouseY < anchorFrame.minY
                 var crossIDs = Set<UUID>()
+                var newCursorID: UUID? = nil
+
                 for (id, tv) in registered {
                     guard id != anchorID else { continue }
+                    let blockTV = tv as? BlockNSTextView
                     let f = tv.convert(tv.bounds, to: nil)
+                    let totalLength = tv.string.count
+
                     if goingDown {
-                        // Block is below anchor and its top edge is at or above mouse
-                        if f.maxY <= anchorFrame.minY && f.maxY >= mouseY { crossIDs.insert(id) }
+                        guard f.maxY <= anchorFrame.minY else {
+                            blockTV?.crossBlockSelectionRange = nil; continue
+                        }
+                        if mouseY >= f.minY && mouseY <= f.maxY {
+                            // Cursor block — partial selection from char 0 to cursor
+                            let end = min(charIndex(in: tv, windowY: mouseY) + 1, totalLength)
+                            blockTV?.crossBlockSelectionRange = NSRange(location: 0, length: end)
+                            newCursorID = id
+                        } else if f.maxY >= mouseY {
+                            // Fully between anchor and cursor
+                            blockTV?.crossBlockSelectionRange = NSRange(location: 0, length: totalLength)
+                            crossIDs.insert(id)
+                        } else {
+                            blockTV?.crossBlockSelectionRange = nil
+                        }
                     } else {
-                        // Block is above anchor and its bottom edge is at or below mouse
-                        if f.minY >= anchorFrame.maxY && f.minY <= mouseY { crossIDs.insert(id) }
+                        guard f.minY >= anchorFrame.maxY else {
+                            blockTV?.crossBlockSelectionRange = nil; continue
+                        }
+                        if mouseY >= f.minY && mouseY <= f.maxY {
+                            // Cursor block — partial selection from cursor to end
+                            let start = charIndex(in: tv, windowY: mouseY)
+                            blockTV?.crossBlockSelectionRange = NSRange(location: start, length: totalLength - start)
+                            newCursorID = id
+                        } else if f.minY <= mouseY {
+                            blockTV?.crossBlockSelectionRange = NSRange(location: 0, length: totalLength)
+                            crossIDs.insert(id)
+                        } else {
+                            blockTV?.crossBlockSelectionRange = nil
+                        }
                     }
                 }
                 manager.crossSelectedIDs = crossIDs
+                manager.crossCursorID = newCursorID
             }
         }
         .onChange(of: undoManager) { _, um in
@@ -737,6 +800,32 @@ private final class BlockNSTextView: NSTextView {
     var onNavigateNext:     ((CursorPlacement) -> Void)?
     // Weak ref so mouseDragged can route cross-block events without a strong cycle.
     weak var registry: BlockRegistry?
+
+    /// When set, draws a selection highlight using glyph rects from the layout manager.
+    /// This lets non-focused blocks show precise, line-snapping selection during a
+    /// cross-block drag — identical visually to the focused block's native selection.
+    var crossBlockSelectionRange: NSRange? {
+        didSet { needsDisplay = true }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Draw cross-block selection background first so text renders on top.
+        // drawsBackground = false means super won't wipe this with a fill.
+        if let range = crossBlockSelectionRange, range.length > 0,
+           let lm = layoutManager, let tc = textContainer {
+            NSColor.selectedTextBackgroundColor.setFill()
+            let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            lm.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: tc
+            ) { [weak self] rect, _ in
+                guard let self else { return }
+                rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y).fill()
+            }
+        }
+        super.draw(dirtyRect)
+    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
