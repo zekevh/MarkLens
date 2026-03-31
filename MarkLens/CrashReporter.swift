@@ -7,7 +7,7 @@ import Foundation
 // server in a future release.
 
 final class CrashReporter: NSObject, MXMetricManagerSubscriber {
-    nonisolated(unsafe) static let shared = CrashReporter()
+    static let shared = CrashReporter()
     nonisolated override init() { super.init() }
 
     func start() {
