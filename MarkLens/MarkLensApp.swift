@@ -366,6 +366,34 @@ final class AppState: ObservableObject {
         }
     }
 
+    func renameFile(_ url: URL, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let newURL = url.deletingLastPathComponent().appendingPathComponent(trimmed)
+        guard newURL.path != url.path else { return }
+        do {
+            try FileManager.default.moveItem(at: url, to: newURL)
+        } catch {
+            present(error, context: "Could not rename \"\(url.lastPathComponent)\"")
+            return
+        }
+        if pinnedURLs.contains(url.absoluteString) {
+            pinnedURLs.remove(url.absoluteString)
+            pinnedURLs.insert(newURL.absoluteString)
+            UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
+        }
+        if let folder = rootFolderURL {
+            rootNodes = buildTree(at: folder)
+        } else {
+            rootNodes = rootNodes.map { node in
+                node.url == url
+                    ? FileNode(url: newURL, name: newURL.lastPathComponent, isDirectory: false)
+                    : node
+            }
+        }
+        if selectedFileURL == url { loadFile(newURL) }
+    }
+
     private func firstFile(in nodes: [FileNode]) -> FileNode? {
         for node in nodes {
             if !node.isDirectory { return node }

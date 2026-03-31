@@ -93,6 +93,8 @@ struct ContentView: View {
 
 struct SidebarView: View {
     @EnvironmentObject var appState: AppState
+    @State private var renamingURL: URL? = nil
+    @State private var renameText: String = ""
 
     var body: some View {
         Group {
@@ -127,6 +129,39 @@ struct SidebarView: View {
                 ) { node in
                     SidebarRow(node: node)
                         .tag(node.url)
+                        .contextMenu {
+                            if !node.isDirectory {
+                                Button {
+                                    renameText = node.url.deletingPathExtension().lastPathComponent
+                                    renamingURL = node.url
+                                } label: {
+                                    Label("Rename File", systemImage: "pencil")
+                                }
+
+                                Divider()
+
+                                Button { appState.togglePin(node.url) } label: {
+                                    Label(
+                                        appState.isPinned(node.url) ? "Unpin" : "Pin",
+                                        systemImage: appState.isPinned(node.url) ? "pin.slash" : "pin"
+                                    )
+                                }
+
+                                Divider()
+
+                                ShareLink(item: node.url) {
+                                    Label("Share", systemImage: "square.and.arrow.up")
+                                }
+
+                                Divider()
+
+                                Button(role: .destructive) {
+                                    appState.deleteFile(node.url)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             if !node.isDirectory {
                                 Button(role: .destructive) {
@@ -151,6 +186,23 @@ struct SidebarView: View {
                 }
                 .listStyle(.sidebar)
             }
+        }
+        .alert("Rename File", isPresented: Binding(
+            get: { renamingURL != nil },
+            set: { if !$0 { renamingURL = nil } }
+        )) {
+            TextField("File name", text: $renameText)
+            Button("Rename") {
+                if let url = renamingURL {
+                    let ext = url.pathExtension
+                    let newName = renameText.trimmingCharacters(in: .whitespaces)
+                    let finalName = newName.lowercased().hasSuffix(".\(ext)") ? newName : "\(newName).\(ext)"
+                    appState.renameFile(url, to: finalName)
+                }
+                renamingURL = nil
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) { renamingURL = nil }
         }
     }
 }
