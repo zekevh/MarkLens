@@ -429,6 +429,7 @@ private struct ListContinuationResult {
 }
 
 private let orderedListRegex = try! NSRegularExpression(pattern: #"^(\d+)\. "#)
+private let alphaListRegex   = try! NSRegularExpression(pattern: #"^([a-zA-Z])\. "#)
 
 private func listContinuationPrefix(from text: String) -> ListContinuationResult? {
     // Task lists (check before plain unordered so "- [ ] " is matched first)
@@ -445,13 +446,22 @@ private func listContinuationPrefix(from text: String) -> ListContinuationResult
             return ListContinuationResult(prefix: marker, isEmpty: rest.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
-    // Ordered lists: "N. "
+    // Numeric ordered lists: "1. ", "2. ", etc.
     let nsText = text as NSString
-    if let match = orderedListRegex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+    let nsRange = NSRange(location: 0, length: nsText.length)
+    if let match = orderedListRegex.firstMatch(in: text, range: nsRange),
        let numRange = Range(match.range(at: 1), in: text) {
         let num = Int(text[numRange]) ?? 1
         let rest = text.dropFirst(match.range.length)
         return ListContinuationResult(prefix: "\(num + 1). ", isEmpty: rest.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+    // Alphabetical ordered lists: "a. ", "b. ", etc.
+    if let match = alphaListRegex.firstMatch(in: text, range: nsRange),
+       let letterRange = Range(match.range(at: 1), in: text),
+       let scalar = text[letterRange].unicodeScalars.first {
+        let nextLetter = String(UnicodeScalar(scalar.value + 1)!)
+        let rest = text.dropFirst(match.range.length)
+        return ListContinuationResult(prefix: "\(nextLetter). ", isEmpty: rest.trimmingCharacters(in: .whitespaces).isEmpty)
     }
     return nil
 }

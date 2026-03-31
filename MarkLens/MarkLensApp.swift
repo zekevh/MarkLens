@@ -385,7 +385,7 @@ final class AppState: ObservableObject {
         // Replace old URL in recents with new URL
         if let idx = recentURLs.firstIndex(where: { $0.path == url.path }) {
             recentURLs[idx] = newURL
-            if let oldBookmark = recentBookmarks.removeValue(forKey: url.path),
+            if recentBookmarks.removeValue(forKey: url.path) != nil,
                let refreshed = try? newURL.bookmarkData(options: .withSecurityScope,
                                                         includingResourceValuesForKeys: nil,
                                                         relativeTo: nil) {

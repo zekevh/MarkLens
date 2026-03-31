@@ -572,7 +572,7 @@ enum Patterns {
     static let inlineCode    = try! NSRegularExpression(pattern: #"(`+)(.+?)\1"#)
     static let fencedCode    = try! NSRegularExpression(pattern: #"^(`{3,}[^\n]*\n)([\s\S]*?)(^`{3,}[ \t]*$)"#, options: .anchorsMatchLines)
     static let blockquote    = try! NSRegularExpression(pattern: #"^(>[ \t]?)(.*)"#, options: .anchorsMatchLines)
-    static let listItem      = try! NSRegularExpression(pattern: #"^([-\*][ \t])(.*)"#, options: .anchorsMatchLines)
+    static let listItem      = try! NSRegularExpression(pattern: #"^([-*+][ \t]|\d+\.[ \t]|[a-zA-Z]\.[ \t])(.*)"#, options: .anchorsMatchLines)
     static let taskListItem  = try! NSRegularExpression(pattern: #"^([-*][ \t])(\[[ xX]\])([ \t])(.*)"#, options: .anchorsMatchLines)
     static let link          = try! NSRegularExpression(pattern: #"(\[)([^\]\n]+)(\]\()([^\)\n]+)(\))"#)
     static let horizontalRule = try! NSRegularExpression(pattern: #"^(\-{3,}|\*{3,}|_{3,})[ \t]*$"#, options: .anchorsMatchLines)
