@@ -287,13 +287,19 @@ class EditorCoordinator: NSObject {
             }
         }
 
-        // Links
+        // Links — foreground + underline on visible text; .link attribute stores the URL
+        // so BlockNSTextView can open it on click and NSTextView shows a pointer cursor.
         Patterns.link.enumerateMatches(in: storage.string, range: range) { m, _, _ in
             guard let m else { return }
             let textRange = m.range(at: 2)
+            let urlRange  = m.range(at: 4)
             if textRange.length > 0 {
                 storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: textRange)
                 storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: textRange)
+                // Store raw URL/path so clicks can open the link without re-parsing the regex.
+                if urlRange.length > 0, let r = Range(urlRange, in: storage.string) {
+                    storage.addAttribute(.link, value: String(storage.string[r]), range: textRange)
+                }
             }
             [m.range(at: 1), m.range(at: 3), m.range(at: 4), m.range(at: 5)].forEach { r in
                 if r.length > 0 { storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: r) }

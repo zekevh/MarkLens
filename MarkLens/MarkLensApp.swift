@@ -191,6 +191,27 @@ final class AppState: ObservableObject {
         recordRecent(url)
     }
 
+    /// Handles a link click from the node editor. External URLs (http/https/mailto) are
+    /// opened in the default browser; everything else is treated as a path relative to
+    /// the currently open file and navigated to inside the editor.
+    func handleLinkClick(_ urlString: String) {
+        // Try as a full URL with a recognised scheme first.
+        if let url = URL(string: urlString),
+           let scheme = url.scheme?.lowercased(),
+           ["http", "https", "mailto", "ftp"].contains(scheme) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        // Internal link — resolve relative to the directory of the open file.
+        guard let base = selectedFileURL?.deletingLastPathComponent() else { return }
+        // Strip any fragment (#heading) and query string before resolving.
+        let pathPart = urlString.components(separatedBy: CharacterSet(charactersIn: "#?")).first ?? urlString
+        guard !pathPart.isEmpty else { return }
+        let resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: base).standardized
+        guard FileManager.default.fileExists(atPath: resolvedURL.path) else { return }
+        loadFile(resolvedURL)
+    }
+
     func clearRecents() {
         recentURLs = []
         recentBookmarks = [:]

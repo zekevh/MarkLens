@@ -24,7 +24,8 @@ struct ContentView: View {
                         NodeEditorView(
                             text: $appState.documentText,
                             searchText: appState.searchText,
-                            onTextChange: { appState.saveCurrentFile(text: $0) }
+                            onTextChange: { appState.saveCurrentFile(text: $0) },
+                            onLinkClick: { appState.handleLinkClick($0) }
                         )
                         .id(appState.selectedFileURL)
                         .ignoresSafeArea()

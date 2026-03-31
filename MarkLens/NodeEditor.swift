@@ -28,6 +28,8 @@ final class BlockRegistry: ObservableObject {
 
     /// Called by each BlockNSTextView.mouseDragged — routes cross-block detection to NodeEditorView.
     var onCrossBlockDrag: ((UUID, CGFloat) -> Void)?
+    /// Called when the user clicks a markdown link. Receives the raw URL/path string from the syntax.
+    var onLinkClick: ((String) -> Void)?
 
     func register(_ tv: NSTextView, id: UUID) {
         let ref = WeakRef(); ref.value = tv
@@ -203,6 +205,7 @@ struct NodeEditorView: View {
     @Binding var text: String
     var searchText: String
     var onTextChange: (String) -> Void
+    var onLinkClick: ((String) -> Void)? = nil
 
     @StateObject private var manager = BlocksManager()
     @Environment(\.undoManager) private var undoManager
@@ -316,6 +319,7 @@ struct NodeEditorView: View {
         .onAppear {
             manager.undoManager = undoManager
             manager.load(from: text)
+            manager.registry.onLinkClick = onLinkClick
             // Route mouseDragged events from each BlockNSTextView to the cross-block
             // detection logic here. NSTextView's internal drag-select loop calls
             // mouseDragged(with:) directly, which is why this is more reliable than
@@ -787,6 +791,9 @@ struct BlockEditorView: NSViewRepresentable {
         tv.isContinuousSpellCheckingEnabled     = false
         tv.isGrammarCheckingEnabled             = false
         tv.typingAttributes = Styles.baseAttributes
+        // Prevent NSTextView from overriding our custom link colour/underline.
+        // Cursor changes on hover are handled by BlockNSTextView.resetCursorRects().
+        tv.linkTextAttributes = [:]
     }
 }
 
@@ -830,6 +837,8 @@ private final class BlockNSTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if toggleTaskCheckboxIfHit(at: point) { return }
+        // Single click on a link opens it; double-click falls through for word selection.
+        if event.clickCount == 1 && handleLinkClickIfHit(at: point) { return }
 
         let anchorID = blockID
         weak var weakRegistry = registry
@@ -890,6 +899,42 @@ private final class BlockNSTextView: NSTextView {
         replaceCharacters(in: checkboxRange, with: replacement)
         didChangeText()
         return true
+    }
+
+    /// Returns true and opens the link if the click landed on text with a `.link` attribute.
+    private func handleLinkClickIfHit(at point: NSPoint) -> Bool {
+        guard let lm = layoutManager, let tc = textContainer,
+              let ts = textStorage else { return false }
+        var fraction: CGFloat = 0
+        let glyphIndex = lm.glyphIndex(for: point, in: tc, fractionOfDistanceThroughGlyph: &fraction)
+        guard glyphIndex < lm.numberOfGlyphs else { return false }
+        let charIndex = lm.characterIndexForGlyph(at: glyphIndex)
+        guard charIndex < ts.length else { return false }
+        guard let urlStr = ts.attribute(.link, at: charIndex, effectiveRange: nil) as? String,
+              !urlStr.isEmpty else { return false }
+        registry?.onLinkClick?(urlStr)
+        return true
+    }
+
+    /// Adds a pointing-hand cursor over every range that carries a `.link` attribute so
+    /// the user gets a visual affordance that clicking opens the link.
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let lm = layoutManager, let tc = textContainer, let ts = textStorage else { return }
+        let full = NSRange(location: 0, length: ts.length)
+        ts.enumerateAttribute(.link, in: full, options: []) { value, range, _ in
+            guard value != nil else { return }
+            let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            lm.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: tc
+            ) { [weak self] rect, _ in
+                guard let self else { return }
+                addCursorRect(rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y),
+                              cursor: .pointingHand)
+            }
+        }
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
