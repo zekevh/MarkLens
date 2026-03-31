@@ -382,6 +382,20 @@ final class AppState: ObservableObject {
             pinnedURLs.insert(newURL.absoluteString)
             UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
         }
+        // Replace old URL in recents with new URL
+        if let idx = recentURLs.firstIndex(where: { $0.path == url.path }) {
+            recentURLs[idx] = newURL
+            if let oldBookmark = recentBookmarks.removeValue(forKey: url.path),
+               let refreshed = try? newURL.bookmarkData(options: .withSecurityScope,
+                                                        includingResourceValuesForKeys: nil,
+                                                        relativeTo: nil) {
+                recentBookmarks[newURL.path] = refreshed
+            } else {
+                recentBookmarks.removeValue(forKey: url.path)
+            }
+            UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
+            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
+        }
         if let folder = rootFolderURL {
             rootNodes = buildTree(at: folder)
         } else {

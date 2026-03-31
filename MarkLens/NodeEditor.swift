@@ -84,12 +84,12 @@ final class BlocksManager: ObservableObject {
 
     // MARK: Split (Enter)
 
-    func splitBlock(id: UUID, originalContent: String, at loc: Int) {
+    func splitBlock(id: UUID, originalContent: String, at loc: Int, newBefore: String? = nil, newAfter: String? = nil, newBlockCursorPos: Int? = nil) {
         guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
         // Capture undo manager before mutating so the closure never touches NSApp.
         let um = undoManager
-        let before = String(originalContent.prefix(loc))
-        let after  = String(originalContent.suffix(originalContent.count - loc))
+        let before = newBefore ?? String(originalContent.prefix(loc))
+        let after  = newAfter  ?? String(originalContent.suffix(originalContent.count - loc))
         let newBlock = MarkdownBlock(content: after)
         let sourceID = id
         let newID    = newBlock.id
@@ -108,7 +108,8 @@ final class BlocksManager: ObservableObject {
 
         blocks[idx].content = before
         blocks.insert(newBlock, at: idx + 1)
-        registry.focus(newID, at: .start)
+        let placement: CursorPlacement = newBlockCursorPos.map { .position($0) } ?? .start
+        registry.focus(newID, at: placement)
     }
 
     // MARK: Merge (Backspace at block start)
@@ -197,7 +198,7 @@ struct NodeEditorView: View {
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
                         registry: manager.registry,
-                        onSplitBlock:        { orig, loc in manager.splitBlock(id: block.id, originalContent: orig, at: loc) },
+                        onSplitBlock:        { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
                         onMergeWithPrevious: { trailing   in manager.mergeWithPrevious(block.id, trailing: trailing) },
                         onNavigatePrevious:  { placement  in manager.navigatePrevious(from: block.id, placement: placement) },
                         onNavigateNext:      { placement  in manager.navigateNext(from: block.id, placement: placement) }
@@ -293,7 +294,7 @@ struct BlockRowView: View {
     var isDropTarget: Bool
     var debugBlocks: Bool
     var registry: BlockRegistry
-    var onSplitBlock: (String, Int) -> Void   // (originalContent, cursorLocation)
+    var onSplitBlock: (String, Int, String?, String?, Int?) -> Void
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
@@ -420,6 +421,41 @@ private func scrollCursorToVisible(in textView: NSTextView) {
     }
 }
 
+// MARK: - List continuation helper
+
+private struct ListContinuationResult {
+    let prefix: String
+    let isEmpty: Bool
+}
+
+private let orderedListRegex = try! NSRegularExpression(pattern: #"^(\d+)\. "#)
+
+private func listContinuationPrefix(from text: String) -> ListContinuationResult? {
+    // Task lists (check before plain unordered so "- [ ] " is matched first)
+    for taskPrefix in ["- [x] ", "- [X] ", "- [ ] "] {
+        if text.hasPrefix(taskPrefix) {
+            let rest = text.dropFirst(taskPrefix.count)
+            return ListContinuationResult(prefix: "- [ ] ", isEmpty: rest.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+    // Unordered lists
+    for marker in ["- ", "* ", "+ "] {
+        if text.hasPrefix(marker) {
+            let rest = text.dropFirst(marker.count)
+            return ListContinuationResult(prefix: marker, isEmpty: rest.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+    // Ordered lists: "N. "
+    let nsText = text as NSString
+    if let match = orderedListRegex.firstMatch(in: text, range: NSRange(location: 0, length: nsText.length)),
+       let numRange = Range(match.range(at: 1), in: text) {
+        let num = Int(text[numRange]) ?? 1
+        let rest = text.dropFirst(match.range.length)
+        return ListContinuationResult(prefix: "\(num + 1). ", isEmpty: rest.trimmingCharacters(in: .whitespaces).isEmpty)
+    }
+    return nil
+}
+
 // MARK: - BlockEditorView (NSViewRepresentable)
 
 struct BlockEditorView: NSViewRepresentable {
@@ -428,7 +464,7 @@ struct BlockEditorView: NSViewRepresentable {
     var searchText: String
     var registry: BlockRegistry
     var onHeightChange: (CGFloat) -> Void
-    var onSplitBlock: (String, Int) -> Void   // (originalContent, cursorLocation)
+    var onSplitBlock: (String, Int, String?, String?, Int?) -> Void
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
@@ -455,17 +491,31 @@ struct BlockEditorView: NSViewRepresentable {
             }
             let loc             = tv.selectedRange().location
             let originalContent = tv.string
-            let before          = String(originalContent.prefix(loc))
+            var newBefore       = String(originalContent.prefix(loc))
+            let rawAfter        = String(originalContent.suffix(originalContent.count - loc))
+            var newAfter        = rawAfter
+            var cursorPos: Int? = nil
+
+            if let lp = listContinuationPrefix(from: newBefore) {
+                if lp.isEmpty {
+                    // Empty list item — break out of list
+                    newBefore = ""
+                } else {
+                    newAfter  = lp.prefix + rawAfter
+                    cursorPos = lp.prefix.count
+                }
+            }
+
             // Immediately truncate the text view so it doesn't flash the full content
             coord.isLoading = true
             tv.undoManager?.disableUndoRegistration()
-            tv.string = before
+            tv.string = newBefore
             tv.undoManager?.enableUndoRegistration()
             coord.isLoading = false
-            coord.onTextChange(before)
+            coord.onTextChange(newBefore)
             coord.updateHeight(for: tv)
             // Block-level split is registered with the app UndoManager
-            coord.onSplitBlock(originalContent, loc)
+            coord.onSplitBlock(originalContent, loc, newBefore, newAfter, cursorPos)
         }
         textView.onBackspaceAtStart = { [weak coord, weak textView] in
             guard let coord, let tv = textView else { return }
@@ -676,7 +726,7 @@ final class BlockEditorCoordinator: NSObject {
 
     var onTextChange:        (String) -> Void
     var onHeightChange:      (CGFloat) -> Void
-    var onSplitBlock:        (String, Int) -> Void   // (originalContent, cursorLocation)
+    var onSplitBlock:        (String, Int, String?, String?, Int?) -> Void
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious:  (CursorPlacement) -> Void
     var onNavigateNext:      (CursorPlacement) -> Void
@@ -685,7 +735,7 @@ final class BlockEditorCoordinator: NSObject {
     init(
         onTextChange:        @escaping (String) -> Void,
         onHeightChange:      @escaping (CGFloat) -> Void,
-        onSplitBlock:        @escaping (String, Int) -> Void,
+        onSplitBlock:        @escaping (String, Int, String?, String?, Int?) -> Void,
         onMergeWithPrevious: @escaping (String) -> Void,
         onNavigatePrevious:  @escaping (CursorPlacement) -> Void,
         onNavigateNext:      @escaping (CursorPlacement) -> Void
