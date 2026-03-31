@@ -231,13 +231,21 @@ struct RecentFilesView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            Button("Open Folder…") { appState.openFolderPanel() }
+            VStack(spacing: 0) {
+                Divider()
+                HStack {
+                    Button("Open Folder…") { appState.openFolderPanel() }
+                    Spacer()
+                    Button("Clear") { appState.clearRecents() }
+                        .foregroundStyle(.secondary)
+                }
                 .buttonStyle(.borderless)
                 .foregroundStyle(Color.accentColor)
                 .font(.callout)
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(.bar)
+            }
         }
     }
 }

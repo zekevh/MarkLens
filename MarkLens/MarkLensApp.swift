@@ -119,6 +119,14 @@ final class AppState: ObservableObject {
         recordRecent(url)
     }
 
+    func clearRecents() {
+        recentURLs = []
+        recentBookmarks = [:]
+        UserDefaults.standard.removeObject(forKey: "recentURLPaths")
+        UserDefaults.standard.removeObject(forKey: "recentBookmarks")
+        NSDocumentController.shared.clearRecentDocuments(nil)
+    }
+
     private func recordRecent(_ url: URL) {
         var list = recentURLs
         list.removeAll { $0.path == url.path }
@@ -383,18 +391,10 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
         }
         // Replace old URL in recents with new URL
-        if let idx = recentURLs.firstIndex(where: { $0.path == url.path }) {
-            recentURLs[idx] = newURL
-            if recentBookmarks.removeValue(forKey: url.path) != nil,
-               let refreshed = try? newURL.bookmarkData(options: .withSecurityScope,
-                                                        includingResourceValuesForKeys: nil,
-                                                        relativeTo: nil) {
-                recentBookmarks[newURL.path] = refreshed
-            } else {
-                recentBookmarks.removeValue(forKey: url.path)
-            }
-            UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
-            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
+        if recentURLs.contains(where: { $0.path == url.path }) {
+            recentURLs.removeAll { $0.path == url.path }
+            recentBookmarks.removeValue(forKey: url.path)
+            recordRecent(newURL)
         }
         if let folder = rootFolderURL {
             rootNodes = buildTree(at: folder)
