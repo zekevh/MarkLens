@@ -480,7 +480,7 @@ struct MarkLensApp: App {
                     appDelegate.appState = appState
                     appState.restoreLastSession()
                 }
-                .frame(minWidth: 800, minHeight: 520)
+                .frame(minWidth: 600, minHeight: 520)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
