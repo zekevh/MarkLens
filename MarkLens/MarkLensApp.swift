@@ -512,10 +512,106 @@ final class AppState: ObservableObject {
     }
 }
 
+// MARK: - Window Accessor
+
+/// Retrieves the hosting NSWindow for a SwiftUI view so AppDelegate can map
+/// windows to their isolated AppState instances.
+private struct WindowAccessor: NSViewRepresentable {
+    let onWindow: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window { self.onWindow(window) }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: - Commands
+
+/// All app-level commands. Uses @FocusedObject so each command targets the
+/// frontmost window's own AppState rather than a shared global instance.
+private struct AppCommands: Commands {
+    @FocusedObject var appState: AppState?
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New File") { appState?.createFile() }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(appState == nil)
+            Button("New Window") { openWindow(id: "main") }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+        }
+        CommandGroup(after: .newItem) {
+            Divider()
+            Button("Open File…") { appState?.openFilePanel() }
+                .keyboardShortcut("o", modifiers: .command)
+            Button("Open Folder…") { appState?.openFolderPanel() }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            Divider()
+            Button("Close Folder") { appState?.closeFolder() }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+                .disabled(appState?.rootNodes.isEmpty ?? true)
+        }
+        CommandGroup(replacing: .toolbar) {
+            Button((appState?.sidebarVisibility ?? .all) == .all ? "Hide Sidebar" : "Show Sidebar") {
+                appState?.sidebarVisibility = appState?.sidebarVisibility == .all ? .detailOnly : .all
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+        }
+        CommandGroup(after: .textEditing) {
+            Button("Find…") { appState?.isSearchFocused = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(appState?.selectedFileURL == nil)
+        }
+        CommandGroup(after: .toolbar) {
+            Button((appState?.isRawMode ?? false) ? "Show Rendered Markdown" : "Show Raw Markdown") {
+                appState?.isRawMode.toggle()
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(appState?.selectedFileURL == nil)
+        }
+    }
+}
+
+// MARK: - Per-Window Root View
+
+/// Each window instance owns its own AppState. The state is exposed via
+/// focusedObject so AppCommands always targets the frontmost window.
+private struct WindowView: View {
+    @StateObject private var appState = AppState()
+    let appDelegate: AppDelegate
+
+    var body: some View {
+        ContentView()
+            .environmentObject(appState)
+            .focusedObject(appState)
+            .background(WindowAccessor { window in
+                appDelegate.register(window: window, state: appState)
+            })
+            .onAppear {
+                appState.restoreLastSession()
+            }
+            .frame(minWidth: 600, minHeight: 350)
+    }
+}
+
 // MARK: - App Entry Point
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    weak var appState: AppState?
+    /// Maps each NSWindow (by pointer identity) to the AppState it hosts.
+    private var windowStates: [NSValue: AppState] = [:]
+
+    /// The AppState belonging to the currently key (frontmost) window.
+    private(set) weak var keyAppState: AppState?
+
+    func register(window: NSWindow, state: AppState) {
+        windowStates[NSValue(nonretainedObject: window)] = state
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CrashReporter.shared.start()
@@ -541,15 +637,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor private func open(_ url: URL) {
         guard !url.hasDirectoryPath,
               FileManager.default.fileExists(atPath: url.path) else { return }
-        appState?.folderWatcher.stopAll()
-        appState?.rootFolderURL = nil
-        appState?.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        appState?.loadFile(url)
+        let state = keyAppState ?? windowStates.values.first
+        state?.folderWatcher.stopAll()
+        state?.rootFolderURL = nil
+        state?.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+        state?.loadFile(url)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Flush any pending debounced save before quitting so no edits are lost
-        appState?.flushPendingSave()
+        // Flush pending debounced saves in every open window before quitting.
+        windowStates.values.forEach { $0.flushPendingSave() }
         return .terminateNow
     }
 
@@ -560,60 +657,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if window.frameAutosaveName.isEmpty {
             window.setFrameAutosaveName("MainWindow")
         }
+        if let state = windowStates[NSValue(nonretainedObject: window)] {
+            keyAppState = state
+        }
     }
 }
 
 @main
 struct MarkLensApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var appState = AppState()
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environmentObject(appState)
-                .onAppear {
-                    appDelegate.appState = appState
-                    appState.restoreLastSession()
-                }
-                .frame(minWidth: 600, minHeight: 350)
+        WindowGroup(id: "main") {
+            WindowView(appDelegate: appDelegate)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("New File") { appState.createFile() }
-                    .keyboardShortcut("n", modifiers: .command)
-            }
-            CommandGroup(after: .newItem) {
-                Divider()
-                Button("Open File…") { appState.openFilePanel() }
-                    .keyboardShortcut("o", modifiers: .command)
-                Button("Open Folder…") { appState.openFolderPanel() }
-                    .keyboardShortcut("o", modifiers: [.command, .shift])
-                Divider()
-                Button("Close Folder") { appState.closeFolder() }
-                    .keyboardShortcut("w", modifiers: [.command, .shift])
-                    .disabled(appState.rootNodes.isEmpty)
-            }
-            CommandGroup(replacing: .toolbar) {
-                Button(appState.sidebarVisibility == .all ? "Hide Sidebar" : "Show Sidebar") {
-                    appState.sidebarVisibility = appState.sidebarVisibility == .all ? .detailOnly : .all
-                }
-                .keyboardShortcut("s", modifiers: [.command, .control])
-            }
-            CommandGroup(after: .textEditing) {
-                Button("Find…") { appState.isSearchFocused = true }
-                    .keyboardShortcut("k", modifiers: .command)
-                    .disabled(appState.selectedFileURL == nil)
-            }
-            CommandGroup(after: .toolbar) {
-                Button(appState.isRawMode ? "Show Rendered Markdown" : "Show Raw Markdown") {
-                    appState.isRawMode.toggle()
-                }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-                .disabled(appState.selectedFileURL == nil)
-            }
+            AppCommands()
         }
     }
 }
