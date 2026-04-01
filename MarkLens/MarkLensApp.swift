@@ -621,6 +621,7 @@ private struct AppCommands: Commands {
 private struct WindowView: View {
     @StateObject private var appState = AppState()
     let appDelegate: AppDelegate
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentView()
@@ -632,12 +633,16 @@ private struct WindowView: View {
             .onAppear {
                 appState.restoreLastSession()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .marklensOpenNewWindow)) { _ in
+                openWindow(id: "main")
+            }
             .frame(minWidth: 600, minHeight: 350)
     }
 }
 
 // MARK: - App Entry Point
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Maps each NSWindow (by pointer identity) to the AppState it hosts.
     private var windowStates: [NSValue: AppState] = [:]
@@ -645,9 +650,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The AppState belonging to the currently key (frontmost) window.
     private(set) weak var keyAppState: AppState?
 
-    /// File URL received from Finder before any window state has registered.
+    /// File URL received from Finder (or MCP new_window) before a window state registers.
     /// Applied to the first window that calls register().
-    private var pendingFileURL: URL?
+    var pendingFileURL: URL?
+
+    private var mcpServer: MCPServer?
 
     func register(window: NSWindow, state: AppState) {
         windowStates[NSValue(nonretainedObject: window)] = state
@@ -667,6 +674,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeKeyNotification,
             object: nil
         )
+        startMCPServer()
+    }
+
+    private func startMCPServer() {
+        let server = MCPServer(
+            openFile: { @MainActor [weak self] url in
+                self?.keyAppState?.openExternalFile(url)
+                NSApp.activate(ignoringOtherApps: true)
+            },
+            newWindow: { @MainActor [weak self] url in
+                if let url { self?.pendingFileURL = url }
+                NotificationCenter.default.post(name: .marklensOpenNewWindow, object: nil)
+            },
+            activateApp: { @MainActor in
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        )
+        mcpServer = server
+        Task {
+            do { try await server.start() }
+            catch { print("[MCPServer] Failed to start on port \(MCPServer.port): \(error)") }
+        }
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {

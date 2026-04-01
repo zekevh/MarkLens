@@ -8,7 +8,18 @@
 
 /* Begin PBXBuildFile section */
 		AA000A022F72D7B1004D4F68 /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */; };
+		E1003D97C0E74255B7EF11C4 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = FF3CE811565744E5B386B5AD /* MCP */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AA000A082F72D7B1004D4F68 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 19FCBF802F72D7B1004D4F68 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 19FCBF872F72D7B1004D4F68;
+			remoteInfo = MarkLens;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		19FCBF882F72D7B1004D4F68 /* MarkLens.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarkLens.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -24,29 +35,12 @@
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
-/* Begin PBXTargetDependency section */
-		AA000A092F72D7B1004D4F68 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 19FCBF872F72D7B1004D4F68 /* MarkLens */;
-			targetProxy = AA000A082F72D7B1004D4F68 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
-/* Begin PBXContainerItemProxy section */
-		AA000A082F72D7B1004D4F68 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 19FCBF802F72D7B1004D4F68 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 19FCBF872F72D7B1004D4F68;
-			remoteInfo = MarkLens;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXFrameworksBuildPhase section */
 		19FCBF852F72D7B1004D4F68 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E1003D97C0E74255B7EF11C4 /* MCP in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -106,6 +100,7 @@
 			);
 			name = MarkLens;
 			packageProductDependencies = (
+				FF3CE811565744E5B386B5AD /* MCP */,
 			);
 			productName = MarkLens;
 			productReference = 19FCBF882F72D7B1004D4F68 /* MarkLens.app */;
@@ -159,6 +154,9 @@
 			);
 			mainGroup = 19FCBF7F2F72D7B1004D4F68;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				195FEDA72F7DBE2F00DA02CA /* XCRemoteSwiftPackageReference "swift-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 19FCBF892F72D7B2004D4F68 /* Products */;
 			projectDirPath = "";
@@ -204,6 +202,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA000A092F72D7B1004D4F68 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 19FCBF872F72D7B1004D4F68 /* MarkLens */;
+			targetProxy = AA000A082F72D7B1004D4F68 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		19FCBF912F72D7B4004D4F68 /* Debug */ = {
@@ -465,6 +471,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		195FEDA72F7DBE2F00DA02CA /* XCRemoteSwiftPackageReference "swift-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FF3CE811565744E5B386B5AD /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 195FEDA72F7DBE2F00DA02CA /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 19FCBF802F72D7B1004D4F68 /* Project object */;
 }

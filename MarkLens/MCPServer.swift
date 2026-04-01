@@ -1,0 +1,291 @@
+import Foundation
+import Network
+import MCP
+
+// MARK: - Notification
+
+extension Foundation.Notification.Name {
+    static let marklensOpenNewWindow = Foundation.Notification.Name("marklens.openNewWindow")
+}
+
+// MARK: - MCPServer
+
+/// Embedded MCP server exposing MarkLens controls to AI agents via
+/// Streamable HTTP transport on localhost:7474.
+///
+/// Add to Claude Desktop's config (~/Library/Application Support/Claude/claude_desktop_config.json):
+///   { "mcpServers": { "marklens": { "url": "http://localhost:7474/mcp" } } }
+actor MCPServer {
+    static let port: UInt16 = 7474
+
+    private var listener: NWListener?
+    private let transport = StatefulHTTPServerTransport()
+    private let server: Server
+
+    private let openFile: @Sendable (URL) async -> Void
+    private let newWindow: @Sendable (URL?) async -> Void
+    private let activateApp: @Sendable () async -> Void
+
+    init(
+        openFile: @escaping @Sendable (URL) async -> Void,
+        newWindow: @escaping @Sendable (URL?) async -> Void,
+        activateApp: @escaping @Sendable () async -> Void
+    ) {
+        self.openFile = openFile
+        self.newWindow = newWindow
+        self.activateApp = activateApp
+        self.server = Server(
+            name: "MarkLens",
+            version: "1.0.0",
+            instructions: """
+                Controls the MarkLens markdown editor. \
+                Use open_file to load a file in the current window, \
+                new_window to spawn an additional editor window, \
+                and activate to bring MarkLens to the foreground.
+                """,
+            capabilities: Server.Capabilities(tools: .init(listChanged: false))
+        )
+    }
+
+    // MARK: - Startup
+
+    func start() async throws {
+        await registerHandlers()
+        // Run MCP protocol processing in the background (runs until transport closes)
+        Task { [server, transport] in
+            try await server.start(transport: transport)
+        }
+        try startListener()
+    }
+
+    // MARK: - Tool Handlers
+
+    private func registerHandlers() async {
+        await server.withMethodHandler(ListTools.self) { _ in
+            ListTools.Result(tools: MCPServer.toolDefinitions)
+        }
+
+        let openFile = openFile
+        let newWindow = newWindow
+        let activateApp = activateApp
+
+        await server.withMethodHandler(CallTool.self) { params in
+            switch params.name {
+            case "open_file":
+                guard let path = params.arguments?["path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                let url = URL(fileURLWithPath: path)
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    return CallTool.Result(
+                        content: [.text(text: "File not found: \(path)", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                await openFile(url)
+                return CallTool.Result(
+                    content: [.text(text: "Opened \(url.lastPathComponent)", annotations: nil, _meta: nil)]
+                )
+
+            case "new_window":
+                let path = params.arguments?["path"]?.stringValue
+                let url = path.map { URL(fileURLWithPath: $0) }
+                if let url, !FileManager.default.fileExists(atPath: url.path) {
+                    return CallTool.Result(
+                        content: [.text(text: "File not found: \(url.path)", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                await newWindow(url)
+                let msg = url.map { "Opened new window with \($0.lastPathComponent)" } ?? "Opened new window"
+                return CallTool.Result(
+                    content: [.text(text: msg, annotations: nil, _meta: nil)]
+                )
+
+            case "activate":
+                await activateApp()
+                return CallTool.Result(
+                    content: [.text(text: "MarkLens activated", annotations: nil, _meta: nil)]
+                )
+
+            default:
+                throw MCPError.methodNotFound("Unknown tool: \(params.name)")
+            }
+        }
+    }
+
+    private static let toolDefinitions: [Tool] = [
+        Tool(
+            name: "open_file",
+            description: "Open a markdown file in the current MarkLens window",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path to the markdown file")
+                    ])
+                ]),
+                "required": .array([.string("path")])
+            ])
+        ),
+        Tool(
+            name: "new_window",
+            description: "Open a new MarkLens window, optionally pre-loaded with a file",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path to the markdown file to open (optional)")
+                    ])
+                ])
+            ])
+        ),
+        Tool(
+            name: "activate",
+            description: "Bring MarkLens to the foreground",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:])
+            ])
+        )
+    ]
+
+    // MARK: - HTTP Listener (Network.framework)
+
+    private func startListener() throws {
+        let tcpParams = NWParameters.tcp
+        tcpParams.allowLocalEndpointReuse = true
+        guard let nwPort = NWEndpoint.Port(rawValue: Self.port) else { return }
+        let l = try NWListener(using: tcpParams, on: nwPort)
+        listener = l
+
+        l.stateUpdateHandler = { state in
+            if case .failed(let err) = state {
+                print("[MCPServer] Listener error: \(err)")
+            }
+        }
+
+        l.newConnectionHandler = { [weak self] connection in
+            guard let self else { return }
+            Task { await self.handleConnection(connection) }
+        }
+
+        l.start(queue: .main)
+    }
+
+    // MARK: - Connection Handling
+
+    private func handleConnection(_ connection: NWConnection) async {
+        connection.start(queue: .main)
+
+        guard let request = await readRequest(from: connection) else {
+            connection.cancel()
+            return
+        }
+
+        let response = await transport.handleRequest(request)
+
+        switch response {
+        case .stream(let sseStream, let headers):
+            // Keep connection alive and stream SSE chunks
+            await writeHead(statusCode: 200, headers: headers, to: connection)
+            do {
+                for try await chunk in sseStream {
+                    guard await write(chunk, to: connection) else { break }
+                }
+            } catch {}
+
+        default:
+            let body = response.bodyData ?? Data()
+            var headers = response.headers
+            headers["Content-Length"] = "\(body.count)"
+            await writeHead(statusCode: response.statusCode, headers: headers, to: connection)
+            _ = await write(body, to: connection)
+        }
+
+        connection.cancel()
+    }
+
+    // MARK: - HTTP Parsing
+
+    private func readRequest(from connection: NWConnection) async -> HTTPRequest? {
+        var buffer = Data()
+        let separator = Data("\r\n\r\n".utf8)
+
+        while true {
+            guard let chunk = await receive(from: connection) else { return nil }
+            buffer.append(chunk)
+            guard let sepRange = buffer.range(of: separator) else { continue }
+
+            // Parse request line and headers
+            let headerData = buffer[..<sepRange.lowerBound]
+            guard let headerString = String(data: headerData, encoding: .utf8) else { return nil }
+            let lines = headerString.components(separatedBy: "\r\n")
+            guard let requestLine = lines.first else { return nil }
+            let parts = requestLine.split(separator: " ", maxSplits: 2).map(String.init)
+            guard parts.count >= 2 else { return nil }
+            let method = parts[0], path = parts[1]
+
+            var headers: [String: String] = [:]
+            for line in lines.dropFirst() where !line.isEmpty {
+                guard let colon = line.firstIndex(of: ":") else { continue }
+                let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
+                let val = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                headers[key] = val
+            }
+
+            // Read body
+            let contentLength = Int(headers["Content-Length"] ?? headers["content-length"] ?? "") ?? 0
+            var body = Data(buffer[sepRange.upperBound...])
+            while body.count < contentLength {
+                guard let more = await receive(from: connection) else { return nil }
+                body.append(more)
+            }
+
+            return HTTPRequest(
+                method: method,
+                headers: headers,
+                body: contentLength > 0 ? Data(body.prefix(contentLength)) : nil,
+                path: path
+            )
+        }
+    }
+
+    private func receive(from connection: NWConnection) async -> Data? {
+        await withCheckedContinuation { cont in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, _ in
+                cont.resume(returning: data.flatMap { $0.isEmpty ? nil : Optional($0) })
+            }
+        }
+    }
+
+    private func writeHead(statusCode: Int, headers: [String: String], to connection: NWConnection) async {
+        let phrase: String
+        switch statusCode {
+        case 200: phrase = "OK"
+        case 202: phrase = "Accepted"
+        case 400: phrase = "Bad Request"
+        case 404: phrase = "Not Found"
+        case 405: phrase = "Method Not Allowed"
+        default:  phrase = "Error"
+        }
+        var head = "HTTP/1.1 \(statusCode) \(phrase)\r\n"
+        for (k, v) in headers { head += "\(k): \(v)\r\n" }
+        head += "\r\n"
+        _ = await write(Data(head.utf8), to: connection)
+    }
+
+    @discardableResult
+    private func write(_ data: Data, to connection: NWConnection) async -> Bool {
+        await withCheckedContinuation { cont in
+            connection.send(content: data, completion: .contentProcessed { err in
+                cont.resume(returning: err == nil)
+            })
+        }
+    }
+}
