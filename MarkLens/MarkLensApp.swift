@@ -510,6 +510,42 @@ final class AppState: ObservableObject {
         }
         return nil
     }
+
+    // MARK: External file open (Finder double-click / drag)
+
+    /// Opens a file received from outside the app (Finder, CLI, drag). Walks up the
+    /// directory tree to find the nearest git root and uses that as the sidebar root
+    /// so the project tree is visible. Falls back to a single-file view if the git
+    /// root is inaccessible (sandbox) or absent.
+    func openExternalFile(_ url: URL) {
+        guard !url.hasDirectoryPath else { return }
+        if let gitRoot = findGitRoot(for: url) {
+            rootFolderURL = gitRoot
+            rebuildTree()
+            // rebuildTree may come back empty if the sandbox blocks the directory;
+            // fall through to single-file mode in that case.
+            if !rootNodes.isEmpty {
+                loadFile(url)
+                return
+            }
+        }
+        // No git root found (or sandbox blocked it) — show just the single file.
+        folderWatcher.stopAll()
+        rootFolderURL = nil
+        rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+        loadFile(url)
+    }
+
+    private func findGitRoot(for url: URL) -> URL? {
+        var dir = url.deletingLastPathComponent()
+        while dir.pathComponents.count > 1 {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git").path) {
+                return dir
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
+    }
 }
 
 // MARK: - Window Accessor
@@ -609,8 +645,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The AppState belonging to the currently key (frontmost) window.
     private(set) weak var keyAppState: AppState?
 
+    /// File URL received from Finder before any window state has registered.
+    /// Applied to the first window that calls register().
+    private var pendingFileURL: URL?
+
     func register(window: NSWindow, state: AppState) {
         windowStates[NSValue(nonretainedObject: window)] = state
+        if let url = pendingFileURL {
+            pendingFileURL = nil
+            state.openExternalFile(url)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -637,11 +681,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor private func open(_ url: URL) {
         guard !url.hasDirectoryPath,
               FileManager.default.fileExists(atPath: url.path) else { return }
-        let state = keyAppState ?? windowStates.values.first
-        state?.folderWatcher.stopAll()
-        state?.rootFolderURL = nil
-        state?.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        state?.loadFile(url)
+        if let state = keyAppState ?? windowStates.values.first {
+            state.openExternalFile(url)
+        } else {
+            // No window registered yet (app just launched via Finder double-click).
+            // Store and apply once the first window comes up.
+            pendingFileURL = url
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
