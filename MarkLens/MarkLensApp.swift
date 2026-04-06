@@ -121,6 +121,79 @@ struct FileNode: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(url) }
 }
 
+// MARK: - GitignoreFilter
+
+/// Parses a single .gitignore file and reports whether a path should be hidden.
+struct GitignoreFilter {
+    private struct Rule {
+        let pattern: String   // cleaned (no leading !, no leading /, no trailing /)
+        let isNegated: Bool
+        let isDirOnly: Bool
+        let anchored: Bool    // pattern contains "/" → matched against full relative path
+    }
+
+    private let rules: [Rule]
+    private let basePath: String  // directory that owns this .gitignore (no trailing /)
+
+    init(at directoryURL: URL) {
+        basePath = directoryURL.path
+        let gitignoreURL = directoryURL.appendingPathComponent(".gitignore")
+        guard let text = try? String(contentsOf: gitignoreURL, encoding: .utf8) else {
+            rules = []
+            return
+        }
+        rules = text.components(separatedBy: .newlines).compactMap { line in
+            var s = line.trimmingCharacters(in: .whitespaces)
+            guard !s.isEmpty, !s.hasPrefix("#") else { return nil }
+            let negated = s.hasPrefix("!"); if negated { s.removeFirst() }
+            let dirOnly = s.hasSuffix("/");  if dirOnly  { s.removeLast()  }
+            let hadLeadingSlash = s.hasPrefix("/"); if hadLeadingSlash { s.removeFirst() }
+            // anchored = path-relative (contains slash, or originally had a leading slash)
+            let anchored = hadLeadingSlash || s.contains("/")
+            return Rule(pattern: s, isNegated: negated, isDirOnly: dirOnly, anchored: anchored)
+        }
+    }
+
+    func isIgnored(_ url: URL, isDirectory: Bool) -> Bool {
+        guard url.path.hasPrefix(basePath + "/") else { return false }
+        let rel  = String(url.path.dropFirst(basePath.count + 1))
+        let name = url.lastPathComponent
+        var result = false
+        for rule in rules {
+            if rule.isDirOnly && !isDirectory { continue }
+            let hit = rule.anchored
+                ? Self.globMatch(pattern: rule.pattern, string: rel)
+                : Self.globMatch(pattern: rule.pattern, string: name)
+                    || Self.globMatchAnywhere(pattern: rule.pattern, relativePath: rel)
+            if hit { result = !rule.isNegated }
+        }
+        return result
+    }
+
+    // MARK: Glob helpers
+
+    private static func globMatch(pattern: String, string: String) -> Bool {
+        if pattern.hasPrefix("**/") {
+            return globMatchAnywhere(pattern: String(pattern.dropFirst(3)), relativePath: string)
+        }
+        if pattern.hasSuffix("/**") {
+            let dir = String(pattern.dropLast(3))
+            return string == dir || string.hasPrefix(dir + "/")
+        }
+        return fnmatch(pattern, string, FNM_PATHNAME | FNM_PERIOD) == 0
+    }
+
+    /// Tries `pattern` against every path suffix of `relativePath` (e.g. `a/b/c` → `b/c`, `c`).
+    private static func globMatchAnywhere(pattern: String, relativePath: String) -> Bool {
+        let parts = relativePath.components(separatedBy: "/")
+        for i in 0..<parts.count {
+            let suffix = parts[i...].joined(separator: "/")
+            if fnmatch(pattern, suffix, FNM_PATHNAME | FNM_PERIOD) == 0 { return true }
+        }
+        return false
+    }
+}
+
 // MARK: - ExternalEditConflict
 
 struct ExternalEditConflict {
@@ -411,8 +484,13 @@ final class AppState: ObservableObject {
 
     // MARK: Tree building
 
-    func buildTree(at url: URL) -> [FileNode] {
+    func buildTree(at url: URL, parentFilters: [GitignoreFilter] = []) -> [FileNode] {
         let fm = FileManager.default
+        // Accumulate .gitignore rules defined in this directory.
+        var filters = parentFilters
+        if fm.fileExists(atPath: url.appendingPathComponent(".gitignore").path) {
+            filters.append(GitignoreFilter(at: url))
+        }
         guard let contents = try? fm.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey, .nameKey],
@@ -421,8 +499,10 @@ final class AppState: ObservableObject {
 
         return contents.compactMap { child -> FileNode? in
             let isDir = (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            // Skip entries matched by any active .gitignore.
+            if filters.contains(where: { $0.isIgnored(child, isDirectory: isDir) }) { return nil }
             if isDir {
-                let children = buildTree(at: child)
+                let children = buildTree(at: child, parentFilters: filters)
                 guard !children.isEmpty else { return nil }  // skip folders with no markdown
                 return FileNode(url: child, name: child.lastPathComponent,
                                isDirectory: true, children: children)
