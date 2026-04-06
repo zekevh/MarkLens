@@ -706,6 +706,7 @@ struct BlockEditorView: NSViewRepresentable {
         textView.onNavigateNext     = { [weak coord] p in coord?.onNavigateNext(p) }
 
         registry.register(textView, id: blockID)
+        context.coordinator.registerTextView(textView)
 
         if !content.isEmpty {
             context.coordinator.isLoading = true
@@ -1044,6 +1045,10 @@ final class BlockEditorCoordinator: NSObject {
 
     func applyFullHighlight(to storage: NSTextStorage) {
         highlighter.applyFullHighlight(to: storage)
+    }
+
+    func registerTextView(_ tv: NSTextView) {
+        highlighter.textView = tv
     }
 
     func applySearchHighlights(to textView: NSTextView, query: String) {

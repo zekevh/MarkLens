@@ -831,5 +831,9 @@ struct MarkLensApp: App {
         .commands {
             AppCommands()
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }

@@ -143,9 +143,27 @@ class EditorCoordinator: NSObject {
     var isLoading = false
     var fullScanWorkItem: DispatchWorkItem?
     private var lastSearchQuery = ""
+    weak var textView: NSTextView?
 
     init(onTextChange: @escaping (String) -> Void) {
         self.onTextChange = onTextChange
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSettingsChange),
+            name: .appSettingsDidChange,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleSettingsChange() {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        applyFullHighlight(to: storage)
+        tv.typingAttributes = Styles.baseAttributes
     }
 
     // MARK: Search highlighting
@@ -507,16 +525,16 @@ extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
 // MARK: - Styles
 
 enum Styles {
-    nonisolated(unsafe) static let bodyFont  = NSFont(name: "FiraCodeNF-Reg", size: 15) ?? NSFont.systemFont(ofSize: 15, weight: .regular)
-    nonisolated(unsafe) static let monoFont  = NSFont(name: "FiraCodeNF-Reg", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    nonisolated(unsafe) static let tableFont = NSFont(name: "FiraCodeNF-Reg", size: 14) ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+    static var bodyFont:  NSFont { AppSettings.shared.bodyNSFont  }
+    static var monoFont:  NSFont { AppSettings.shared.monoNSFont  }
+    static var tableFont: NSFont { AppSettings.shared.tableNSFont }
 
-    nonisolated(unsafe) static let baseAttributes: [NSAttributedString.Key: Any] = [
-        .font: bodyFont,
-        .foregroundColor: NSColor.labelColor,
-        .paragraphStyle: defaultParagraphStyle,
-        .ligature: 2
-    ]
+    static var baseAttributes: [NSAttributedString.Key: Any] {
+        [.font:            bodyFont,
+         .foregroundColor: NSColor.labelColor,
+         .paragraphStyle:  defaultParagraphStyle,
+         .ligature:        AppSettings.shared.ligatures ? 2 : 0]
+    }
 
     nonisolated static var defaultParagraphStyle: NSParagraphStyle {
         let ps = NSMutableParagraphStyle(); ps.lineSpacing = 4; ps.paragraphSpacing = 2; return ps
