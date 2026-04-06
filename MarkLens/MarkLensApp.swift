@@ -109,7 +109,7 @@ final class FolderWatcher {
 // MARK: - FileNode
 
 struct FileNode: Identifiable, Hashable {
-    let id = UUID()
+    var id: URL { url }
     let url: URL
     let name: String
     let isDirectory: Bool
@@ -117,8 +117,8 @@ struct FileNode: Identifiable, Hashable {
 
     var optionalChildren: [FileNode]? { isDirectory ? (children ?? []) : nil }
 
-    static func == (lhs: FileNode, rhs: FileNode) -> Bool { lhs.id == rhs.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: FileNode, rhs: FileNode) -> Bool { lhs.url == rhs.url }
+    func hash(into hasher: inout Hasher) { hasher.combine(url) }
 }
 
 // MARK: - ExternalEditConflict
