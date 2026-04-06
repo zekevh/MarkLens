@@ -1,8 +1,8 @@
 ## Bugs, Improvs
 
-- [ ] search with (cmd  + f)
+- [x] search with (cmd  + f)
 
-- [ ] support for font ligature. (->)
+- [x] support for font ligature. (->)
 
 - [ ] toggle full screen shortcut (cmd + ctr + f)
 

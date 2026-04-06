@@ -507,14 +507,15 @@ extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
 // MARK: - Styles
 
 enum Styles {
-    nonisolated(unsafe) static let bodyFont  = NSFont.systemFont(ofSize: 15, weight: .regular)
-    nonisolated(unsafe) static let monoFont  = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    nonisolated(unsafe) static let tableFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+    nonisolated(unsafe) static let bodyFont  = NSFont(name: "FiraCodeNF-Reg", size: 15) ?? NSFont.systemFont(ofSize: 15, weight: .regular)
+    nonisolated(unsafe) static let monoFont  = NSFont(name: "FiraCodeNF-Reg", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    nonisolated(unsafe) static let tableFont = NSFont(name: "FiraCodeNF-Reg", size: 14) ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
 
     nonisolated(unsafe) static let baseAttributes: [NSAttributedString.Key: Any] = [
         .font: bodyFont,
         .foregroundColor: NSColor.labelColor,
-        .paragraphStyle: defaultParagraphStyle
+        .paragraphStyle: defaultParagraphStyle,
+        .ligature: 2
     ]
 
     nonisolated static var defaultParagraphStyle: NSParagraphStyle {
