@@ -681,7 +681,7 @@ private struct AppCommands: Commands {
         }
         CommandGroup(after: .textEditing) {
             Button("Find…") { appState?.isSearchFocused = true }
-                .keyboardShortcut("k", modifiers: .command)
+                .keyboardShortcut("f", modifiers: .command)
                 .disabled(appState?.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {
