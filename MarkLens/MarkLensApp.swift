@@ -678,6 +678,11 @@ private struct AppCommands: Commands {
                 appState?.sidebarVisibility = appState?.sidebarVisibility == .all ? .detailOnly : .all
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
+
+            Button("Enter Full Screen") {
+                NSApp.keyWindow?.toggleFullScreen(nil)
+            }
+            .keyboardShortcut("f", modifiers: [.command, .control])
         }
         CommandGroup(after: .textEditing) {
             Button("Find…") { appState?.isSearchFocused = true }
