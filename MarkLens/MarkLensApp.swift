@@ -381,6 +381,22 @@ final class AppState: ObservableObject {
         recentURLs = storedPaths
             .filter { recentBookmarks[$0] != nil }
             .map { URL(fileURLWithPath: $0) }
+
+        // Restore last opened folder
+        if let bookmarkData = UserDefaults.standard.data(forKey: "rootFolderBookmark") {
+            var isStale = false
+            if let scopedURL = try? URL(resolvingBookmarkData: bookmarkData,
+                                        options: .withSecurityScope,
+                                        relativeTo: nil,
+                                        bookmarkDataIsStale: &isStale),
+               scopedURL.startAccessingSecurityScopedResource() {
+                if isStale {
+                    saveFolderBookmark(scopedURL)
+                }
+                rootFolderURL = scopedURL
+                rebuildTree()
+            }
+        }
     }
 
     func saveCurrentFile(text: String) {
@@ -420,6 +436,7 @@ final class AppState: ObservableObject {
         fileWatcher.stop()
         folderWatcher.stopAll()
         rootFolderURL = nil
+        saveFolderBookmark(nil)
         rootNodes = []
         selectedFileURL = nil
         documentText = ""
@@ -457,11 +474,9 @@ final class AppState: ObservableObject {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Open Folder"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        rootFolderURL = url
-        rebuildTree()
-        if let first = firstFile(in: rootNodes) {
-            loadFile(first.url)
+        panel.begin { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.setRootFolder(url)
         }
     }
 
@@ -475,11 +490,38 @@ final class AppState: ObservableObject {
             UTType(filenameExtension: "markdown") ?? .plainText
         ]
         panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        rootFolderURL = nil
-        folderWatcher.stopAll()
-        rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        loadFile(url)
+        panel.begin { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.rootFolderURL = nil
+            self.saveFolderBookmark(nil)
+            self.folderWatcher.stopAll()
+            self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+            self.loadFile(url)
+        }
+    }
+
+    /// Sets the root folder, saves a security-scoped bookmark, rebuilds the tree.
+    func setRootFolder(_ url: URL) {
+        rootFolderURL = url
+        saveFolderBookmark(url)
+        rebuildTree()
+        if let first = firstFile(in: rootNodes) {
+            loadFile(first.url)
+        }
+    }
+
+    private func saveFolderBookmark(_ url: URL?) {
+        guard let url else {
+            UserDefaults.standard.removeObject(forKey: "rootFolderBookmark")
+            UserDefaults.standard.removeObject(forKey: "rootFolderPath")
+            return
+        }
+        if let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil) {
+            UserDefaults.standard.set(bookmark, forKey: "rootFolderBookmark")
+            UserDefaults.standard.set(url.path, forKey: "rootFolderPath")
+        }
     }
 
     // MARK: Tree building
@@ -654,28 +696,34 @@ private struct AppCommands: Commands {
     @FocusedObject var appState: AppState?
     @Environment(\.openWindow) private var openWindow
 
+    /// @FocusedObject can be nil on first launch before any window interaction.
+    /// Fall back to AppDelegate's tracked key window state.
+    private var activeState: AppState? {
+        appState ?? (NSApp.delegate as? AppDelegate)?.keyAppState
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New File") { appState?.createFile() }
+            Button("New File") { activeState?.createFile() }
                 .keyboardShortcut("n", modifiers: .command)
-                .disabled(appState == nil)
+                .disabled(activeState == nil)
             Button("New Window") { openWindow(id: "main") }
                 .keyboardShortcut("n", modifiers: [.command, .option])
         }
         CommandGroup(after: .newItem) {
             Divider()
-            Button("Open File…") { appState?.openFilePanel() }
+            Button("Open File…") { activeState?.openFilePanel() }
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Open Folder…") { appState?.openFolderPanel() }
+            Button("Open Folder…") { activeState?.openFolderPanel() }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
-            Button("Close Folder") { appState?.closeFolder() }
+            Button("Close Folder") { activeState?.closeFolder() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
-                .disabled(appState?.rootNodes.isEmpty ?? true)
+                .disabled(activeState?.rootNodes.isEmpty ?? true)
         }
         CommandGroup(replacing: .toolbar) {
-            Button((appState?.sidebarVisibility ?? .all) == .all ? "Hide Sidebar" : "Show Sidebar") {
-                appState?.sidebarVisibility = appState?.sidebarVisibility == .all ? .detailOnly : .all
+            Button((activeState?.sidebarVisibility ?? .all) == .all ? "Hide Sidebar" : "Show Sidebar") {
+                activeState?.sidebarVisibility = activeState?.sidebarVisibility == .all ? .detailOnly : .all
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
 
@@ -685,16 +733,16 @@ private struct AppCommands: Commands {
             .keyboardShortcut("f", modifiers: [.command, .control])
         }
         CommandGroup(after: .textEditing) {
-            Button("Find…") { appState?.isSearchFocused = true }
+            Button("Find…") { activeState?.isSearchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(appState?.selectedFileURL == nil)
+                .disabled(activeState?.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {
-            Button((appState?.isRawMode ?? false) ? "Show Rendered Markdown" : "Show Raw Markdown") {
-                appState?.isRawMode.toggle()
+            Button((activeState?.isRawMode ?? false) ? "Show Rendered Markdown" : "Show Raw Markdown") {
+                activeState?.isRawMode.toggle()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(appState?.selectedFileURL == nil)
+            .disabled(activeState?.selectedFileURL == nil)
         }
     }
 }
