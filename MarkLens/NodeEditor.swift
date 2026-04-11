@@ -694,7 +694,7 @@ struct BlockRowView: View {
     var onNavigateNext: (CursorPlacement) -> Void
 
     @State private var height: CGFloat = 32
-    @State private var isFrontMatterExpanded = true
+    @State private var isFrontMatterExpanded = false
     @State private var isHTMLEditing = false
 
     private var blockPadding: (top: CGFloat, bottom: CGFloat) {
@@ -804,6 +804,41 @@ struct BlockRowView: View {
                                 }
                             }
                         }
+                    } else if let codeFenceLanguage = codeFenceLanguage {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(codeFenceLanguage)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 2)
+
+                            BlockEditorView(
+                                blockID: block.id,
+                                blockKind: block.kind,
+                                content: $block.content,
+                                searchText: searchText,
+                                registry: registry,
+                                onHeightChange: { h in height = h },
+                                onSplitBlock: onSplitBlock,
+                                onMergeWithPrevious: onMergeWithPrevious,
+                                onNavigatePrevious: onNavigatePrevious,
+                                onNavigateNext: onNavigateNext
+                            )
+                            .frame(height: max(height, 96))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 12)
+                            .background {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color.secondary.opacity(0.08))
+                            }
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                            }
+                        }
+                        .padding(.vertical, 10)
                     } else {
                         BlockEditorView(
                             blockID: block.id,
@@ -854,6 +889,11 @@ struct BlockRowView: View {
     private var htmlSource: String? {
         if block.kind == .htmlBlock { return block.content }
         return nil
+    }
+
+    private var codeFenceLanguage: String? {
+        guard case let .codeFence(language) = block.kind else { return nil }
+        return language?.isEmpty == false ? language?.uppercased() : "Code"
     }
 
     private var previewHeight: CGFloat {
@@ -1356,6 +1396,7 @@ struct BlockEditorView: NSViewRepresentable {
 
     func makeCoordinator() -> BlockEditorCoordinator {
         BlockEditorCoordinator(
+            blockKind:           blockKind,
             onTextChange:        { [self] t in content = t },
             onHeightChange:      onHeightChange,
             onSplitBlock:        onSplitBlock,
@@ -1711,6 +1752,7 @@ private final class BlockNSTextView: NSTextView {
 final class BlockEditorCoordinator: NSObject {
     // Composition: delegate highlighting work to an inner EditorCoordinator
     private let highlighter: EditorCoordinator
+    private let blockKind: MarkdownBlockKind
 
     var onTextChange:        (String) -> Void
     var onHeightChange:      (CGFloat) -> Void
@@ -1721,6 +1763,7 @@ final class BlockEditorCoordinator: NSObject {
     var isLoading = false
 
     init(
+        blockKind: MarkdownBlockKind,
         onTextChange:        @escaping (String) -> Void,
         onHeightChange:      @escaping (CGFloat) -> Void,
         onSplitBlock:        @escaping (String, Int, String?, String?, Int?) -> Void,
@@ -1728,6 +1771,7 @@ final class BlockEditorCoordinator: NSObject {
         onNavigatePrevious:  @escaping (CursorPlacement) -> Void,
         onNavigateNext:      @escaping (CursorPlacement) -> Void
     ) {
+        self.blockKind          = blockKind
         self.highlighter         = EditorCoordinator(onTextChange: { _ in })
         self.onTextChange        = onTextChange
         self.onHeightChange      = onHeightChange
@@ -1739,6 +1783,7 @@ final class BlockEditorCoordinator: NSObject {
 
     func applyFullHighlight(to storage: NSTextStorage) {
         highlighter.applyFullHighlight(to: storage)
+        removeCodeFenceBackgroundIfNeeded(from: storage)
     }
 
     func registerTextView(_ tv: NSTextView) {
@@ -1757,6 +1802,11 @@ final class BlockEditorCoordinator: NSObject {
         onHeightChange(max(ceil(rect.height) + inset.height * 2, 24))
     }
 
+    private func removeCodeFenceBackgroundIfNeeded(from storage: NSTextStorage) {
+        guard case .codeFence = blockKind else { return }
+        storage.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: storage.length))
+    }
+
 }
 
 
@@ -1772,6 +1822,7 @@ extension BlockEditorCoordinator: @preconcurrency NSTextStorageDelegate {
                                 didProcessEditing: editedMask,
                                 range: editedRange,
                                 changeInLength: delta)
+        removeCodeFenceBackgroundIfNeeded(from: textStorage)
     }
 }
 
