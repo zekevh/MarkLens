@@ -34,6 +34,10 @@ struct MarkdownDocumentModel {
 }
 
 enum MarkdownEngine {
+    static func classifyBlockSource(_ source: String) -> MarkdownBlockKind {
+        classifyBlock(source)
+    }
+
     static func buildDocument(from source: String) -> MarkdownDocumentModel {
         let (frontMatter, bodySource) = splitFrontMatter(from: source)
         let ast = Document(parsing: bodySource)

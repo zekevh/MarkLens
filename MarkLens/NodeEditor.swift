@@ -420,7 +420,7 @@ struct NodeEditorView: View {
             }
             .padding(.leading, 8)
             .padding(.trailing, 48)
-            .padding(.top, 72)
+            .padding(.top, 20)
             .padding(.bottom, 40)
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -619,6 +619,12 @@ struct NodeEditorView: View {
             manager.undoManager = um
         }
         .onChange(of: manager.blocks) { _, newBlocks in
+            for index in manager.blocks.indices {
+                let classified = MarkdownEngine.classifyBlockSource(manager.blocks[index].content)
+                if manager.blocks[index].kind != classified {
+                    manager.blocks[index].kind = classified
+                }
+            }
             let serialized = serializeMarkdownBlocks(newBlocks)
             guard serialized != text else { return }
             // Keep documentText in sync so reloadIfChangedOnDisk can correctly
