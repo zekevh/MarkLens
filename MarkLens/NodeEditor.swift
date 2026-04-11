@@ -1009,8 +1009,9 @@ struct BlockEditorView: NSViewRepresentable {
         tv.isAutomaticDashSubstitutionEnabled   = false
         tv.isAutomaticTextReplacementEnabled    = false
         tv.isAutomaticLinkDetectionEnabled      = false
-        tv.isContinuousSpellCheckingEnabled     = false
-        tv.isGrammarCheckingEnabled             = false
+        tv.isAutomaticSpellingCorrectionEnabled = true
+        tv.isContinuousSpellCheckingEnabled     = true
+        tv.isGrammarCheckingEnabled             = true
         tv.typingAttributes = Styles.baseAttributes
         // Prevent NSTextView from overriding our custom link colour/underline.
         // Cursor changes on hover are handled by BlockNSTextView.resetCursorRects().
