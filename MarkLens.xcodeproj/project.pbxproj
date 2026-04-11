@@ -7,7 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0A4A3F5A2C11411B93C19FD1 /* MarkdownEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4C48D18A104999A1C6B620 /* MarkdownEngineTests.swift */; };
+		21C976866C54445988A434AB /* AppStateTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */; };
+		3CF1B52861434DDA8D45EC16 /* AppStateFileOperationsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1CA348E29E412A890E8C56 /* AppStateFileOperationsTests.swift */; };
+		6F097C92752F4C42B787D04A /* BlocksManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */; };
 		AA000A022F72D7B1004D4F68 /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */; };
+		B6FE30B56F514D20BD26AE3F /* AppStateSearchReplaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A57DB1822044E680DFF976 /* AppStateSearchReplaceTests.swift */; };
 		D18C4FBAA24B4BF8939B2A01 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = D18C4FBC7D5644A1B574AB70 /* Markdown */; };
 		E1003D97C0E74255B7EF11C4 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = FF3CE811565744E5B386B5AD /* MCP */; };
 /* End PBXBuildFile section */
@@ -24,8 +29,13 @@
 
 /* Begin PBXFileReference section */
 		19FCBF882F72D7B1004D4F68 /* MarkLens.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarkLens.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4D4C48D18A104999A1C6B620 /* MarkdownEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEngineTests.swift; sourceTree = "<group>"; };
+		75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTreeTests.swift; sourceTree = "<group>"; };
+		8C1CA348E29E412A890E8C56 /* AppStateFileOperationsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFileOperationsTests.swift; sourceTree = "<group>"; };
 		AA000A002F72D7B1004D4F68 /* MarkLensTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarkLensTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
+		CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlocksManagerTests.swift; sourceTree = "<group>"; };
+		D1A57DB1822044E680DFF976 /* AppStateSearchReplaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateSearchReplaceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -90,6 +100,11 @@
 		AA000A032F72D7B1004D4F68 /* MarkLensTests */ = {
 			isa = PBXGroup;
 			children = (
+				4D4C48D18A104999A1C6B620 /* MarkdownEngineTests.swift */,
+				D1A57DB1822044E680DFF976 /* AppStateSearchReplaceTests.swift */,
+				8C1CA348E29E412A890E8C56 /* AppStateFileOperationsTests.swift */,
+				75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */,
+				CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */,
 				AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */,
 			);
 			path = MarkLensTests;
@@ -214,6 +229,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				21C976866C54445988A434AB /* AppStateTreeTests.swift in Sources */,
+				6F097C92752F4C42B787D04A /* BlocksManagerTests.swift in Sources */,
+				3CF1B52861434DDA8D45EC16 /* AppStateFileOperationsTests.swift in Sources */,
+				B6FE30B56F514D20BD26AE3F /* AppStateSearchReplaceTests.swift in Sources */,
+				0A4A3F5A2C11411B93C19FD1 /* MarkdownEngineTests.swift in Sources */,
 				AA000A022F72D7B1004D4F68 /* MarkdownParserTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
