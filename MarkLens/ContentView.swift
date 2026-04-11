@@ -192,6 +192,16 @@ struct SidebarView: View {
                 ) { node in
                     SidebarRow(node: node)
                         .tag(node.url)
+                        .draggable(node.url.path) {
+                            SidebarDragPreview(node: node)
+                        }
+                        .dropDestination(for: String.self) { items, _ in
+                            guard node.isDirectory,
+                                  let sourcePath = items.first
+                            else { return false }
+                            appState.moveNode(URL(fileURLWithPath: sourcePath), into: node.url)
+                            return true
+                        }
                         .contextMenu {
                             if !node.isDirectory {
                                 Button {
@@ -332,6 +342,24 @@ struct SidebarRow: View {
         } icon: {
             Image(systemName: node.isDirectory ? "folder" : "doc.text")
         }
+    }
+}
+
+private struct SidebarDragPreview: View {
+    let node: FileNode
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: node.isDirectory ? "folder" : "doc.text")
+                .foregroundStyle(.secondary)
+            Text(node.name)
+                .lineLimit(1)
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: 220, alignment: .leading)
     }
 }
 

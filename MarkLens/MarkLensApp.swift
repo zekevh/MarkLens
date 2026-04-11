@@ -718,6 +718,52 @@ final class AppState: ObservableObject {
         if selectedFileURL == url { loadFile(newURL) }
     }
 
+    func moveNode(_ sourceURL: URL, into destinationFolderURL: URL) {
+        guard sourceURL != destinationFolderURL else { return }
+        guard destinationFolderURL.hasDirectoryPath else { return }
+        guard sourceURL.deletingLastPathComponent() != destinationFolderURL else { return }
+
+        let sourcePath = sourceURL.standardizedFileURL.path
+        let destinationPath = destinationFolderURL.standardizedFileURL.path
+        if destinationPath.hasPrefix(sourcePath + "/") {
+            errorMessage = "Cannot move a folder into one of its own subfolders."
+            return
+        }
+
+        let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
+        guard !FileManager.default.fileExists(atPath: targetURL.path) else {
+            errorMessage = "\"\(targetURL.lastPathComponent)\" already exists in \"\(destinationFolderURL.lastPathComponent)\"."
+            return
+        }
+
+        do {
+            try FileManager.default.moveItem(at: sourceURL, to: targetURL)
+        } catch {
+            present(error, context: "Could not move \"\(sourceURL.lastPathComponent)\"")
+            return
+        }
+
+        if pinnedURLs.contains(sourceURL.absoluteString) {
+            pinnedURLs.remove(sourceURL.absoluteString)
+            pinnedURLs.insert(targetURL.absoluteString)
+            UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
+        }
+
+        if recentURLs.contains(where: { $0.path == sourceURL.path }) {
+            recentURLs.removeAll { $0.path == sourceURL.path }
+            recentBookmarks.removeValue(forKey: sourceURL.path)
+            recordRecent(targetURL)
+        }
+
+        if rootFolderURL != nil {
+            rebuildTree()
+        }
+
+        if selectedFileURL == sourceURL {
+            loadFile(targetURL)
+        }
+    }
+
     private func firstFile(in nodes: [FileNode]) -> FileNode? {
         for node in nodes {
             if !node.isDirectory { return node }

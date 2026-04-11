@@ -16,7 +16,7 @@
 
 - [x] search + replace functionality
 
-- [ ] files and folders in the left sidebar I can drag and drop to move them in or out of folder / subfolders
+- [x] files and folders in the left sidebar I can drag and drop to move them in or out of folder / subfolders
 
 - [ ] spell chek like grammarly
 
