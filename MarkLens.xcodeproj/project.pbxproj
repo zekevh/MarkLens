@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA000A022F72D7B1004D4F68 /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */; };
+		D18C4FBAA24B4BF8939B2A01 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = D18C4FBC7D5644A1B574AB70 /* Markdown */; };
 		E1003D97C0E74255B7EF11C4 /* MCP in Frameworks */ = {isa = PBXBuildFile; productRef = FF3CE811565744E5B386B5AD /* MCP */; };
 /* End PBXBuildFile section */
 
@@ -40,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D18C4FBAA24B4BF8939B2A01 /* Markdown in Frameworks */,
 				E1003D97C0E74255B7EF11C4 /* MCP in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -100,6 +102,7 @@
 			);
 			name = MarkLens;
 			packageProductDependencies = (
+				D18C4FBC7D5644A1B574AB70 /* Markdown */,
 				FF3CE811565744E5B386B5AD /* MCP */,
 			);
 			productName = MarkLens;
@@ -155,6 +158,7 @@
 			mainGroup = 19FCBF7F2F72D7B1004D4F68;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				D18C4FBBB61D4167B3A12AA0 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 				195FEDA72F7DBE2F00DA02CA /* XCRemoteSwiftPackageReference "swift-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -481,9 +485,22 @@
 				minimumVersion = 0.12.0;
 			};
 		};
+		D18C4FBBB61D4167B3A12AA0 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		D18C4FBC7D5644A1B574AB70 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D18C4FBBB61D4167B3A12AA0 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
+		};
 		FF3CE811565744E5B386B5AD /* MCP */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 195FEDA72F7DBE2F00DA02CA /* XCRemoteSwiftPackageReference "swift-sdk" */;
