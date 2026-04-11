@@ -225,6 +225,8 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published var externalEditConflict: ExternalEditConflict? = nil
     @Published var isRawMode: Bool = false
+    @Published var isPathBarVisible: Bool = true
+    @Published var isStatusBarVisible: Bool = true
 
     private var saveWorkItem: DispatchWorkItem?
     private var lastSavedText: String? = nil
@@ -957,6 +959,18 @@ private struct AppCommands: Commands {
                 .disabled(activeState?.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {
+            Button((activeState?.isPathBarVisible ?? true) ? "Hide Path Bar" : "Show Path Bar") {
+                activeState?.isPathBarVisible.toggle()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .option])
+
+            Button((activeState?.isStatusBarVisible ?? true) ? "Hide Status Bar" : "Show Status Bar") {
+                activeState?.isStatusBarVisible.toggle()
+            }
+            .keyboardShortcut("'", modifiers: .command)
+
+            Divider()
+
             Button((activeState?.isRawMode ?? false) ? "Show Rendered Markdown" : "Show Raw Markdown") {
                 activeState?.isRawMode.toggle()
             }
