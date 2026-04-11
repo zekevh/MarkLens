@@ -3,6 +3,12 @@ import Combine
 import UniformTypeIdentifiers
 import AppKit
 
+enum UITestLaunchEnvironment {
+    static let disableRestore = "MARKLENS_UI_TEST_DISABLE_RESTORE"
+    static let rootFolder = "MARKLENS_UI_TEST_ROOT_FOLDER"
+    static let rawMode = "MARKLENS_UI_TEST_RAW_MODE"
+}
+
 // MARK: - FileWatcher
 // Uses kqueue (O_EVTONLY) to detect writes, renames, and atomic replacements
 // (git checkout, most editors) without participating in file-system locking.
@@ -924,6 +930,7 @@ private struct WindowView: View {
     @StateObject private var appState = AppState()
     let appDelegate: AppDelegate
     @Environment(\.openWindow) private var openWindow
+    private let environment = ProcessInfo.processInfo.environment
 
     var body: some View {
         ContentView()
@@ -933,7 +940,17 @@ private struct WindowView: View {
                 appDelegate.register(window: window, state: appState)
             })
             .onAppear {
-                appState.restoreLastSession()
+                let shouldRestore = environment[UITestLaunchEnvironment.disableRestore] != "1"
+                if shouldRestore {
+                    appState.restoreLastSession()
+                }
+                if let rootFolderPath = environment[UITestLaunchEnvironment.rootFolder], !rootFolderPath.isEmpty {
+                    let url = URL(fileURLWithPath: rootFolderPath, isDirectory: true)
+                    appState.setRootFolder(url)
+                }
+                if environment[UITestLaunchEnvironment.rawMode] == "1" {
+                    appState.isRawMode = true
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .marklensOpenNewWindow)) { _ in
                 openWindow(id: "main")

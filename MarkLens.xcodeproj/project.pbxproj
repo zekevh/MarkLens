@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0A4A3F5A2C11411B93C19FD1 /* MarkdownEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D4C48D18A104999A1C6B620 /* MarkdownEngineTests.swift */; };
+		1E4950C2C1D64FBAAA7D35A4 /* MarkLensUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4D389EBB6A410A974F6A62 /* MarkLensUITests.swift */; };
 		21C976866C54445988A434AB /* AppStateTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */; };
 		3CF1B52861434DDA8D45EC16 /* AppStateFileOperationsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1CA348E29E412A890E8C56 /* AppStateFileOperationsTests.swift */; };
 		6F097C92752F4C42B787D04A /* BlocksManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */; };
@@ -25,9 +26,17 @@
 			remoteGlobalIDString = 19FCBF872F72D7B1004D4F68;
 			remoteInfo = MarkLens;
 		};
+		EA1D1A4A485748808B3160A0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 19FCBF802F72D7B1004D4F68 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 19FCBF872F72D7B1004D4F68;
+			remoteInfo = MarkLens;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		1D4D389EBB6A410A974F6A62 /* MarkLensUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkLensUITests.swift; sourceTree = "<group>"; };
 		19FCBF882F72D7B1004D4F68 /* MarkLens.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarkLens.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4D4C48D18A104999A1C6B620 /* MarkdownEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEngineTests.swift; sourceTree = "<group>"; };
 		75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTreeTests.swift; sourceTree = "<group>"; };
@@ -36,6 +45,7 @@
 		AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
 		CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlocksManagerTests.swift; sourceTree = "<group>"; };
 		D1A57DB1822044E680DFF976 /* AppStateSearchReplaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateSearchReplaceTests.swift; sourceTree = "<group>"; };
+		E84F6B0DAAE940EEAEC5F3F9 /* MarkLensUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarkLensUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -76,6 +86,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EA36A2CF539548F194B3A57C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -84,6 +101,7 @@
 			children = (
 				19FCBF8A2F72D7B2004D4F68 /* MarkLens */,
 				AA000A032F72D7B1004D4F68 /* MarkLensTests */,
+				E1BF0F9EFF274B0E82248F72 /* MarkLensUITests */,
 				19FCBF892F72D7B2004D4F68 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -93,6 +111,7 @@
 			children = (
 				19FCBF882F72D7B1004D4F68 /* MarkLens.app */,
 				AA000A002F72D7B1004D4F68 /* MarkLensTests.xctest */,
+				E84F6B0DAAE940EEAEC5F3F9 /* MarkLensUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +127,14 @@
 				AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */,
 			);
 			path = MarkLensTests;
+			sourceTree = "<group>";
+		};
+		E1BF0F9EFF274B0E82248F72 /* MarkLensUITests */ = {
+			isa = PBXGroup;
+			children = (
+				1D4D389EBB6A410A974F6A62 /* MarkLensUITests.swift */,
+			);
+			path = MarkLensUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -157,6 +184,26 @@
 			productReference = AA000A002F72D7B1004D4F68 /* MarkLensTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		EA61513BB1D04991A4A347E8 /* MarkLensUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EA86C67A3D0E4E1DBEF1FE6F /* Build configuration list for PBXNativeTarget "MarkLensUITests" */;
+			buildPhases = (
+				EA5FE6217BAE4F07B438B900 /* Sources */,
+				EA36A2CF539548F194B3A57C /* Frameworks */,
+				EA4D7A1D04B647A8A7FD3481 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EA03A518D0C3408BA0572E36 /* PBXTargetDependency */,
+			);
+			name = MarkLensUITests;
+			packageProductDependencies = (
+			);
+			productName = MarkLensUITests;
+			productReference = E84F6B0DAAE940EEAEC5F3F9 /* MarkLensUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -171,6 +218,10 @@
 						CreatedOnToolsVersion = 26.3;
 					};
 					AA000A072F72D7B1004D4F68 = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 19FCBF872F72D7B1004D4F68;
+					};
+					EA61513BB1D04991A4A347E8 = {
 						CreatedOnToolsVersion = 26.3;
 						TestTargetID = 19FCBF872F72D7B1004D4F68;
 					};
@@ -196,6 +247,7 @@
 			targets = (
 				19FCBF872F72D7B1004D4F68 /* MarkLens */,
 				AA000A072F72D7B1004D4F68 /* MarkLensTests */,
+				EA61513BB1D04991A4A347E8 /* MarkLensUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -209,6 +261,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA000A062F72D7B1004D4F68 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EA4D7A1D04B647A8A7FD3481 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -238,6 +297,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EA5FE6217BAE4F07B438B900 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1E4950C2C1D64FBAAA7D35A4 /* MarkLensUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -245,6 +312,11 @@
 			isa = PBXTargetDependency;
 			target = 19FCBF872F72D7B1004D4F68 /* MarkLens */;
 			targetProxy = AA000A082F72D7B1004D4F68 /* PBXContainerItemProxy */;
+		};
+		EA03A518D0C3408BA0572E36 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 19FCBF872F72D7B1004D4F68 /* MarkLens */;
+			targetProxy = EA1D1A4A485748808B3160A0 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -477,6 +549,50 @@
 			};
 			name = Release;
 		};
+		EA47641AA8D84FE29F3DFBA0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.zvh.marklens.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = MarkLens;
+			};
+			name = Debug;
+		};
+		EA72668664C84FB0BEA7EFA0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.zvh.marklens.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = MarkLens;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -503,6 +619,15 @@
 			buildConfigurations = (
 				AA000A0A2F72D7B1004D4F68 /* Debug */,
 				AA000A0B2F72D7B1004D4F68 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EA86C67A3D0E4E1DBEF1FE6F /* Build configuration list for PBXNativeTarget "MarkLensUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EA47641AA8D84FE29F3DFBA0 /* Debug */,
+				EA72668664C84FB0BEA7EFA0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

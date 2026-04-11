@@ -55,6 +55,7 @@ struct ContentView: View {
                 Button(action: { appState.createFile() }) {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
+                .accessibilityIdentifier("newNoteButton")
                 .help("New Note (⌘N)")
                 .disabled(appState.rootNodes.isEmpty)
             }
@@ -259,6 +260,7 @@ struct SidebarView: View {
                         }
                 }
                 .listStyle(.sidebar)
+                .accessibilityIdentifier("sidebarList")
             }
         }
         .alert("Rename File", isPresented: Binding(
@@ -343,6 +345,7 @@ struct SidebarRow: View {
         } icon: {
             Image(systemName: node.isDirectory ? "folder" : "doc.text")
         }
+        .accessibilityIdentifier("sidebarRow-\(node.name)")
     }
 }
 
@@ -387,6 +390,7 @@ struct RawTextEditorView: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = true
         textView.isGrammarCheckingEnabled = true
         textView.isAutomaticTextReplacementEnabled = false
+        textView.setAccessibilityIdentifier("rawTextEditor")
         textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = NSColor.textBackgroundColor
@@ -439,6 +443,7 @@ struct EmptyEditorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+        .accessibilityIdentifier("emptyEditorView")
     }
 }
 
