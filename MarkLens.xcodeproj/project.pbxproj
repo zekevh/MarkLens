@@ -28,9 +28,22 @@
 		AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParserTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E1A7D220C5F64C42923F7BE1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 19FCBF872F72D7B1004D4F68 /* MarkLens */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		19FCBF8A2F72D7B2004D4F68 /* MarkLens */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E1A7D220C5F64C42923F7BE1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = MarkLens;
 			sourceTree = "<group>";
 		};
