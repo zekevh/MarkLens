@@ -7,6 +7,7 @@ enum UITestLaunchEnvironment {
     static let disableRestore = "MARKLENS_UI_TEST_DISABLE_RESTORE"
     static let rootFolder = "MARKLENS_UI_TEST_ROOT_FOLDER"
     static let rawMode = "MARKLENS_UI_TEST_RAW_MODE"
+    static let harness = "MARKLENS_UI_TEST_HARNESS"
 }
 
 // MARK: - FileWatcher
@@ -467,6 +468,49 @@ final class AppState: ObservableObject {
             documentText = conflict.diskContent
             lastSavedText = conflict.diskContent
         }
+    }
+
+    func createFile(named fileName: String, contents: String = "") {
+        let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        let normalizedName = trimmedName.lowercased().hasSuffix(".md") ? trimmedName : "\(trimmedName).md"
+        let baseURL = rootFolderURL ?? selectedFileURL?.deletingLastPathComponent()
+        guard let dir = baseURL else { return }
+
+        let url = dir.appendingPathComponent(normalizedName)
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            errorMessage = "\"\(url.lastPathComponent)\" already exists."
+            return
+        }
+
+        do {
+            try contents.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            present(error, context: "Could not create \"\(url.lastPathComponent)\"")
+            return
+        }
+
+        if rootFolderURL != nil {
+            rebuildTree()
+        } else {
+            rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+        }
+        loadFile(url)
+    }
+
+    func simulateExternalConflict(unsavedText: String, diskText: String) {
+        guard let url = selectedFileURL else { return }
+        documentText = unsavedText
+        do {
+            try diskText.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            present(error, context: "Could not simulate external edit for \"\(url.lastPathComponent)\"")
+            return
+        }
+        externalEditConflict = ExternalEditConflict(
+            diskContent: diskText,
+            fileName: url.lastPathComponent
+        )
     }
 
     private func present(_ error: Error, context: String) {
@@ -945,7 +989,8 @@ private struct WindowView: View {
                     appState.restoreLastSession()
                 }
                 if let rootFolderPath = environment[UITestLaunchEnvironment.rootFolder], !rootFolderPath.isEmpty {
-                    let url = URL(fileURLWithPath: rootFolderPath, isDirectory: true)
+                    let sourceURL = URL(fileURLWithPath: rootFolderPath, isDirectory: true)
+                    let url = uiTestWorkspaceURL(for: sourceURL) ?? sourceURL
                     appState.setRootFolder(url)
                 }
                 if environment[UITestLaunchEnvironment.rawMode] == "1" {
@@ -956,6 +1001,23 @@ private struct WindowView: View {
                 openWindow(id: "main")
             }
             .frame(minWidth: 600, minHeight: 350)
+    }
+
+    private func uiTestWorkspaceURL(for sourceURL: URL) -> URL? {
+        guard environment[UITestLaunchEnvironment.harness] == "1" else { return nil }
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarkLens-UITest-Workspace", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+            let destinationURL = tempRoot.appendingPathComponent(sourceURL.lastPathComponent, isDirectory: true)
+            try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        } catch {
+            return nil
+        }
     }
 }
 

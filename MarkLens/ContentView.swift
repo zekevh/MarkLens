@@ -6,6 +6,10 @@ import AppKit
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @FocusState private var isSearchFocused: Bool
+    private let environment = ProcessInfo.processInfo.environment
+    private var isUITestHarnessEnabled: Bool {
+        environment[UITestLaunchEnvironment.harness] == "1"
+    }
     var body: some View {
         NavigationSplitView(columnVisibility: $appState.sidebarVisibility) {
             SidebarView()
@@ -66,6 +70,32 @@ struct ContentView: View {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
                     .help("Share Note")
+                }
+            }
+
+            if isUITestHarnessEnabled {
+                ToolbarItemGroup(placement: .automatic) {
+                    Button("Create Harness Note") {
+                        appState.createFile(named: "Harness Note")
+                    }
+                    .accessibilityIdentifier("uiTestCreateButton")
+
+                    Button("Rename Selected") {
+                        guard let selectedURL = appState.selectedFileURL else { return }
+                        let ext = selectedURL.pathExtension
+                        appState.renameFile(selectedURL, to: "Renamed Alpha.\(ext)")
+                    }
+                    .accessibilityIdentifier("uiTestRenameButton")
+                    .disabled(appState.selectedFileURL == nil)
+
+                    Button("Inject Conflict") {
+                        appState.simulateExternalConflict(
+                            unsavedText: "Local unsaved edit",
+                            diskText: "Disk version from test"
+                        )
+                    }
+                    .accessibilityIdentifier("uiTestConflictButton")
+                    .disabled(appState.selectedFileURL == nil)
                 }
             }
         }

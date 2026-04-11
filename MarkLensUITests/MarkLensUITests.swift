@@ -5,6 +5,7 @@ final class MarkLensUITests: XCTestCase {
     private let disableRestoreKey = "MARKLENS_UI_TEST_DISABLE_RESTORE"
     private let rootFolderKey = "MARKLENS_UI_TEST_ROOT_FOLDER"
     private let rawModeKey = "MARKLENS_UI_TEST_RAW_MODE"
+    private let harnessKey = "MARKLENS_UI_TEST_HARNESS"
     private var tempDirectoryURL: URL!
 
     override func setUpWithError() throws {
@@ -59,11 +60,62 @@ final class MarkLensUITests: XCTestCase {
         XCTAssertEqual(rawEditor(in: app).value as? String, "# Beta\n\nSecond note")
     }
 
+    func testHarnessCanCreateNamedNote() throws {
+        try "# Alpha\n\nFirst note".write(
+            to: tempDirectoryURL.appendingPathComponent("Alpha.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let app = launchApp(rootFolder: tempDirectoryURL)
+        let createButton = app.buttons["uiTestCreateButton"]
+        XCTAssertTrue(createButton.waitForExistence(timeout: 5))
+        createButton.click()
+
+        XCTAssertTrue(app.staticTexts["Harness Note.md"].waitForExistence(timeout: 5))
+        XCTAssertEqual(rawEditor(in: app).value as? String, "")
+    }
+
+    func testHarnessCanRenameSelectedNote() throws {
+        try "# Alpha\n\nFirst note".write(
+            to: tempDirectoryURL.appendingPathComponent("Alpha.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let app = launchApp(rootFolder: tempDirectoryURL)
+        let renameButton = app.buttons["uiTestRenameButton"]
+        XCTAssertTrue(renameButton.waitForExistence(timeout: 5))
+        renameButton.click()
+
+        XCTAssertTrue(app.staticTexts["Renamed Alpha.md"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Alpha.md"].exists)
+        XCTAssertEqual(rawEditor(in: app).value as? String, "# Alpha\n\nFirst note")
+    }
+
+    func testHarnessCanTriggerConflictAndUseDiskVersion() throws {
+        try "# Alpha\n\nFirst note".write(
+            to: tempDirectoryURL.appendingPathComponent("Alpha.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let app = launchApp(rootFolder: tempDirectoryURL)
+        let conflictButton = app.buttons["uiTestConflictButton"]
+        XCTAssertTrue(conflictButton.waitForExistence(timeout: 5))
+        conflictButton.click()
+
+        XCTAssertTrue(app.staticTexts["File Changed on Disk"].waitForExistence(timeout: 5))
+        app.sheets.buttons["Use Disk Version"].click()
+        XCTAssertEqual(rawEditor(in: app).value as? String, "Disk version from test")
+    }
+
     private func launchApp(rootFolder: URL) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[disableRestoreKey] = "1"
         app.launchEnvironment[rootFolderKey] = rootFolder.path
         app.launchEnvironment[rawModeKey] = "1"
+        app.launchEnvironment[harnessKey] = "1"
         app.launch()
         return app
     }
