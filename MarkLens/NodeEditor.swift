@@ -695,6 +695,7 @@ struct BlockRowView: View {
 
     @State private var height: CGFloat = 32
     @State private var isFrontMatterExpanded = true
+    @State private var isHTMLEditing = false
 
     private var blockPadding: (top: CGFloat, bottom: CGFloat) {
         if block.kind == .frontMatter { return (top: 0, bottom: 18) }
@@ -767,19 +768,57 @@ struct BlockRowView: View {
                         ImageBlockPreview(url: resolvedURL, alt: imageInfo.alt)
                     }
 
-                    BlockEditorView(
-                        blockID: block.id,
-                        blockKind: block.kind,
-                        content: $block.content,
-                        searchText: searchText,
-                        registry: registry,
-                        onHeightChange: { h in height = h },
-                        onSplitBlock: onSplitBlock,
-                        onMergeWithPrevious: onMergeWithPrevious,
-                        onNavigatePrevious: onNavigatePrevious,
-                        onNavigateNext: onNavigateNext
-                    )
-                    .frame(height: max(height, 24))
+                    if let htmlSource = htmlSource {
+                        if isHTMLEditing {
+                            HStack {
+                                Text("HTML Source")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Done") {
+                                    withAnimation(.easeInOut(duration: 0.16)) {
+                                        isHTMLEditing = false
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                            }
+
+                            BlockEditorView(
+                                blockID: block.id,
+                                blockKind: block.kind,
+                                content: $block.content,
+                                searchText: searchText,
+                                registry: registry,
+                                onHeightChange: { h in height = h },
+                                onSplitBlock: onSplitBlock,
+                                onMergeWithPrevious: onMergeWithPrevious,
+                                onNavigatePrevious: onNavigatePrevious,
+                                onNavigateNext: onNavigateNext
+                            )
+                            .frame(height: max(height, 96))
+                        } else {
+                            HTMLBlockPreview(html: htmlSource) {
+                                withAnimation(.easeInOut(duration: 0.16)) {
+                                    isHTMLEditing = true
+                                }
+                            }
+                        }
+                    } else {
+                        BlockEditorView(
+                            blockID: block.id,
+                            blockKind: block.kind,
+                            content: $block.content,
+                            searchText: searchText,
+                            registry: registry,
+                            onHeightChange: { h in height = h },
+                            onSplitBlock: onSplitBlock,
+                            onMergeWithPrevious: onMergeWithPrevious,
+                            onNavigatePrevious: onNavigatePrevious,
+                            onNavigateNext: onNavigateNext
+                        )
+                        .frame(height: max(height, 24))
+                    }
                 }
             }
         }
@@ -812,12 +851,20 @@ struct BlockRowView: View {
         return nil
     }
 
+    private var htmlSource: String? {
+        if block.kind == .htmlBlock { return block.content }
+        return nil
+    }
+
     private var previewHeight: CGFloat {
-        imageInfo == nil ? 0 : 220
+        if imageInfo != nil { return 220 }
+        if htmlSource != nil && !isHTMLEditing { return 180 }
+        return 0
     }
 
     private var visibleEditorHeight: CGFloat {
         if block.kind == .frontMatter && !isFrontMatterExpanded { return 28 }
+        if htmlSource != nil && !isHTMLEditing { return 0 }
         return max(height, 24)
     }
 }
@@ -936,6 +983,93 @@ private struct ImageBlockPreview: View {
                         .padding(.horizontal, 12)
                 }
             }
+    }
+}
+
+private struct HTMLBlockPreview: View {
+    let html: String
+    let onEdit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("HTML Preview")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Edit HTML", action: onEdit)
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 2)
+
+            HTMLPreviewTextView(html: html)
+                .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 180)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+                .onTapGesture(perform: onEdit)
+        }
+        .padding(.vertical, 10)
+    }
+}
+
+private struct HTMLPreviewTextView: NSViewRepresentable {
+    let html: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 14, height: 12)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        textView.textStorage?.setAttributedString(renderedHTML)
+    }
+
+    private var renderedHTML: NSAttributedString {
+        let wrapped = """
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif; font-size: 14px; line-height: 1.5; color: #f2f2f7;">
+        \(html)
+        </div>
+        """
+
+        guard let data = wrapped.data(using: .utf8),
+              let attr = try? NSMutableAttributedString(
+                data: data,
+                options: [
+                    .documentType: NSAttributedString.DocumentType.html,
+                    .characterEncoding: String.Encoding.utf8.rawValue
+                ],
+                documentAttributes: nil
+              ) else {
+            return NSAttributedString(string: html)
+        }
+
+        let fullRange = NSRange(location: 0, length: attr.length)
+        attr.addAttributes([
+            .foregroundColor: NSColor.labelColor,
+            .font: NSFont.systemFont(ofSize: 14)
+        ], range: fullRange)
+        return attr
     }
 }
 
