@@ -708,6 +708,16 @@ private struct AppCommands: Commands {
         NSApp.keyWindow?.firstResponder?.undoManager ?? NSApp.keyWindow?.undoManager
     }
 
+    private func performUndo() {
+        guard activeUndoManager?.canUndo == true else { return }
+        NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+    }
+
+    private func performRedo() {
+        guard activeUndoManager?.canRedo == true else { return }
+        NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New File") { activeState?.createFile() }
@@ -718,18 +728,14 @@ private struct AppCommands: Commands {
         }
         CommandGroup(replacing: .undoRedo) {
             Button(activeUndoManager?.undoMenuItemTitle ?? "Undo") {
-                guard let undoManager = activeUndoManager, undoManager.canUndo else { return }
-                undoManager.undo()
+                performUndo()
             }
             .keyboardShortcut("z", modifiers: .command)
-            .disabled(!(activeUndoManager?.canUndo ?? false))
 
             Button(activeUndoManager?.redoMenuItemTitle ?? "Redo") {
-                guard let undoManager = activeUndoManager, undoManager.canRedo else { return }
-                undoManager.redo()
+                performRedo()
             }
-            .keyboardShortcut("Z", modifiers: [.command, .shift])
-            .disabled(!(activeUndoManager?.canRedo ?? false))
+            .keyboardShortcut("z", modifiers: [.command, .shift])
         }
         CommandGroup(after: .newItem) {
             Divider()

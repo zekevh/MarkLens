@@ -12,7 +12,7 @@
 
 ## Features
 
-- [ ] support for tab multi line and shift tab for indentation not indentation
+- [x] support for tab multi line and shift tab for indentation not indentation
 
 - [ ] search + replace functionality
 
@@ -26,5 +26,3 @@
 **Data range:** 2024-01-01 → 2025-12-31
 **Source:** ANAC via anticorruzione-mcp
 **Filter:** affidamento diretto, SERVIZI
-
-- [ ] turn into the tools called log.

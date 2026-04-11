@@ -80,6 +80,8 @@ final class BlockRegistry: ObservableObject {
 
 @MainActor
 final class BlocksManager: ObservableObject {
+    private static let indentUnit = "    "
+
     @Published var blocks: [MarkdownBlock] = []
     @Published var allBlocksSelected = false
     @Published var crossSelectedIDs: Set<UUID> = []
@@ -186,6 +188,175 @@ final class BlocksManager: ObservableObject {
         blocks.move(fromOffsets: IndexSet(integer: from), toOffset: to)
     }
 
+    // MARK: Multi-block indentation
+
+    func indentBlocks(ids: Set<UUID>, outdent: Bool) {
+        guard !ids.isEmpty else { return }
+
+        let originalContents = Dictionary(uniqueKeysWithValues: blocks.compactMap { block in
+            ids.contains(block.id) ? (block.id, block.content) : nil
+        })
+        guard !originalContents.isEmpty else { return }
+
+        let um = undoManager
+        um?.registerUndo(withTarget: self) { mgr in
+            MainActor.assumeIsolated {
+                for index in mgr.blocks.indices {
+                    guard let original = originalContents[mgr.blocks[index].id] else { continue }
+                    mgr.blocks[index].content = original
+                }
+            }
+        }
+        um?.setActionName(outdent ? "Outdent Blocks" : "Indent Blocks")
+
+        for index in blocks.indices where ids.contains(blocks[index].id) {
+            blocks[index].content = outdent
+                ? Self.outdentedBlockContent(blocks[index].content)
+                : Self.indentedBlockContent(blocks[index].content)
+        }
+    }
+
+    private static func indentedBlockContent(_ content: String) -> String {
+        content
+            .components(separatedBy: "\n")
+            .map { indentUnit + $0 }
+            .joined(separator: "\n")
+    }
+
+    private static func outdentedBlockContent(_ content: String) -> String {
+        content
+            .components(separatedBy: "\n")
+            .map { line in
+                if line.hasPrefix("\t") { return String(line.dropFirst()) }
+                let removed = min(line.prefix { $0 == " " }.count, indentUnit.count)
+                return String(line.dropFirst(removed))
+            }
+            .joined(separator: "\n")
+    }
+
+    // MARK: Multi-block deletion
+
+    func deleteAllSelectedBlocks() {
+        let originalBlocks = blocks
+        let originalFocusID = blocks.first?.id
+
+        undoManager?.registerUndo(withTarget: self) { mgr in
+            MainActor.assumeIsolated {
+                mgr.blocks = originalBlocks
+                if let originalFocusID {
+                    mgr.registry.focus(originalFocusID, at: .start)
+                }
+            }
+        }
+        undoManager?.setActionName("Delete Selection")
+
+        let replacement = MarkdownBlock(content: "")
+        blocks = [replacement]
+        registry.focus(replacement.id, at: .start)
+    }
+
+    @discardableResult
+    func deleteCrossBlockSelection(anchorID: UUID, anchorRange: NSRange, cursorRangeByID: [UUID: NSRange]) -> Bool {
+        guard let anchorIndex = blocks.firstIndex(where: { $0.id == anchorID }) else { return false }
+
+        let involvedIDs = Set([anchorID] + Array(crossSelectedIDs) + Array(cursorRangeByID.keys))
+        guard involvedIDs.count > 1 || anchorRange.length > 0 else { return false }
+
+        let originalBlocks = blocks
+        let originalFocusID = anchorID
+        let safeAnchorRange = clampedRange(anchorRange, for: blocks[anchorIndex].content)
+
+        undoManager?.registerUndo(withTarget: self) { mgr in
+            MainActor.assumeIsolated {
+                mgr.blocks = originalBlocks
+                mgr.registry.focus(originalFocusID, at: .position(min(safeAnchorRange.location, mgr.blocks.first(where: { $0.id == originalFocusID })?.content.count ?? 0)))
+            }
+        }
+        undoManager?.setActionName("Delete Selection")
+
+        // Single block selection can occur if the anchor has a native range but the
+        // cross-block state is still populated from the drag gesture teardown.
+        if cursorRangeByID.isEmpty && crossSelectedIDs.isEmpty {
+            let ns = blocks[anchorIndex].content as NSString
+            blocks[anchorIndex].content = ns.replacingCharacters(in: safeAnchorRange, with: "")
+            registry.focus(anchorID, at: .position(safeAnchorRange.location))
+            return true
+        }
+
+        let cursorID = cursorRangeByID.keys.compactMap { id in
+            blocks.contains(where: { $0.id == id }) ? id : nil
+        }.min { lhs, rhs in
+            (blocks.firstIndex(where: { $0.id == lhs }) ?? 0) < (blocks.firstIndex(where: { $0.id == rhs }) ?? 0)
+        }
+
+        guard let cursorID,
+              let cursorIndex = blocks.firstIndex(where: { $0.id == cursorID }),
+              let rawCursorRange = cursorRangeByID[cursorID] else {
+            let ns = blocks[anchorIndex].content as NSString
+            blocks[anchorIndex].content = ns.replacingCharacters(in: safeAnchorRange, with: "")
+            for id in crossSelectedIDs {
+                if let index = blocks.firstIndex(where: { $0.id == id }) {
+                    blocks.remove(at: index)
+                }
+            }
+            if blocks.isEmpty {
+                let replacement = MarkdownBlock(content: "")
+                blocks = [replacement]
+                registry.focus(replacement.id, at: .start)
+            } else {
+                registry.focus(anchorID, at: .position(min(safeAnchorRange.location, blocks[anchorIndex].content.count)))
+            }
+            return true
+        }
+
+        let safeCursorRange = clampedRange(rawCursorRange, for: blocks[cursorIndex].content)
+        let startIndex: Int
+        let endIndex: Int
+        let startID: UUID
+        let endID: UUID
+        let startRange: NSRange
+        let endRange: NSRange
+
+        if anchorIndex <= cursorIndex {
+            startIndex = anchorIndex
+            endIndex = cursorIndex
+            startID = anchorID
+            endID = cursorID
+            startRange = safeAnchorRange
+            endRange = safeCursorRange
+        } else {
+            startIndex = cursorIndex
+            endIndex = anchorIndex
+            startID = cursorID
+            endID = anchorID
+            startRange = safeCursorRange
+            endRange = safeAnchorRange
+        }
+
+        let startContent = blocks[startIndex].content as NSString
+        let endContent = blocks[endIndex].content as NSString
+        let prefix = startContent.substring(to: startRange.location)
+        let suffixStart = endRange.location + endRange.length
+        let suffix = endContent.substring(from: min(suffixStart, endContent.length))
+        let merged = prefix + suffix
+
+        blocks[startIndex].content = merged
+        if endIndex > startIndex {
+            blocks.removeSubrange((startIndex + 1)...endIndex)
+        }
+
+        let focusID = blocks[startIndex].id
+        registry.focus(focusID, at: .position(prefix.count))
+        return true
+    }
+
+    private func clampedRange(_ range: NSRange, for content: String) -> NSRange {
+        let length = (content as NSString).length
+        let location = min(max(0, range.location), length)
+        let maxLength = max(0, length - location)
+        return NSRange(location: location, length: min(max(0, range.length), maxLength))
+    }
+
     // MARK: Navigation (no undo needed)
 
     func navigatePrevious(from id: UUID, placement: CursorPlacement) {
@@ -264,6 +435,55 @@ struct NodeEditorView: View {
                 default: // .keyDown
                     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                     let ch = event.charactersIgnoringModifiers?.lowercased()
+                    if event.keyCode == 51 || event.keyCode == 117 {
+                        if manager.allBlocksSelected {
+                            manager.deleteAllSelectedBlocks()
+                            manager.allBlocksSelected = false
+                            manager.clearCrossBlockSelection()
+                            return nil
+                        }
+
+                        if (!manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil),
+                           let anchorTV = NSApp.keyWindow?.firstResponder as? BlockNSTextView {
+                            let registered = manager.registry.allRegistered()
+                            var cursorRanges: [UUID: NSRange] = [:]
+                            if let cursorID = manager.crossCursorID,
+                               let cursorTV = registered.first(where: { $0.0 == cursorID })?.1 as? BlockNSTextView,
+                               let range = cursorTV.crossBlockSelectionRange,
+                               range.length > 0 {
+                                cursorRanges[cursorID] = range
+                            }
+                            if manager.deleteCrossBlockSelection(
+                                anchorID: anchorTV.blockID,
+                                anchorRange: anchorTV.selectedRange(),
+                                cursorRangeByID: cursorRanges
+                            ) {
+                                manager.allBlocksSelected = false
+                                manager.clearCrossBlockSelection()
+                                return nil
+                            }
+                        }
+                    }
+                    if event.keyCode == 48 {
+                        if manager.allBlocksSelected {
+                            manager.indentBlocks(
+                                ids: Set(manager.blocks.map(\.id)),
+                                outdent: flags.contains(.shift)
+                            )
+                            return nil
+                        }
+
+                        if !manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil,
+                           let anchorID = (NSApp.keyWindow?.firstResponder as? BlockNSTextView)?.blockID {
+                            var ids = manager.crossSelectedIDs
+                            ids.insert(anchorID)
+                            if let cursorID = manager.crossCursorID { ids.insert(cursorID) }
+                            if ids.count > 1 {
+                                manager.indentBlocks(ids: ids, outdent: flags.contains(.shift))
+                                return nil
+                            }
+                        }
+                    }
                     // Cmd+Shift+D: debug overlay
                     if flags == [.command, .shift] && ch == "d" {
                         debugBlocks.toggle()
@@ -801,6 +1021,8 @@ struct BlockEditorView: NSViewRepresentable {
 // MARK: - BlockNSTextView
 
 private final class BlockNSTextView: NSTextView {
+    private static let indentUnit = "    "
+
     var blockID: UUID = UUID()
     var onEnter: (() -> Void)?
     var onBackspaceAtStart: (() -> Void)?
@@ -950,9 +1172,13 @@ private final class BlockNSTextView: NSTextView {
         let isShift  = mods.contains(.shift)
         let isOpt    = mods.contains(.option)
         let isCmd    = mods.contains(.command)
-        let modified = isShift || isOpt || isCmd
+        let isCtrl   = mods.contains(.control)
+        let modified = isShift || isOpt || isCmd || isCtrl
 
         switch event.keyCode {
+        case 48 where !isOpt && !isCmd && !isCtrl:      // Tab / Shift+Tab
+            if isShift { outdentSelection() } else { indentSelection() }
+            return
         case 36 where !isShift:                          // Return
             onEnter?(); return
         case 51:                                         // Backspace
@@ -1008,6 +1234,96 @@ private final class BlockNSTextView: NSTextView {
         let cur  = lm.lineFragmentRect(forGlyphAt: min(gi, lm.numberOfGlyphs - 1), effectiveRange: nil)
         let last = lm.lineFragmentRect(forGlyphAt: lm.numberOfGlyphs - 1, effectiveRange: nil)
         return abs(cur.minY - last.minY) < 1
+    }
+
+    private func indentSelection() {
+        applyIndentation(outdent: false)
+    }
+
+    private func outdentSelection() {
+        applyIndentation(outdent: true)
+    }
+
+    private func applyIndentation(outdent: Bool) {
+        let selection = selectedRange()
+        let ns = string as NSString
+        let affectedRange = lineRangeForIndentation(from: selection, in: ns)
+        let original = ns.substring(with: affectedRange)
+        let lines = original.components(separatedBy: "\n")
+
+        var updatedLines: [String] = []
+        var selectionLocation = selection.location
+        var selectionLength = selection.length
+
+        for (index, line) in lines.enumerated() {
+            let isLastTrailingEmptyLine = index == lines.count - 1 && line.isEmpty && original.hasSuffix("\n")
+            if isLastTrailingEmptyLine {
+                updatedLines.append(line)
+                continue
+            }
+
+            if outdent {
+                let removedCount: Int
+                if line.hasPrefix("\t") {
+                    removedCount = 1
+                } else {
+                    removedCount = min(line.prefix { $0 == " " }.count, Self.indentUnit.count)
+                }
+
+                if removedCount > 0 {
+                    let lineStart = affectedRange.location + originalOffset(ofLineAt: index, in: lines)
+                    if selection.location > lineStart {
+                        let deltaBeforeSelection = min(removedCount, selection.location - lineStart)
+                        selectionLocation -= deltaBeforeSelection
+                    }
+
+                    let selectionEnd = selection.location + selection.length
+                    let lineSelectionStart = max(selection.location, lineStart)
+                    let lineSelectionEnd = min(selectionEnd, lineStart + line.count)
+                    if lineSelectionEnd > lineSelectionStart {
+                        let overlap = min(removedCount, lineSelectionEnd - lineStart)
+                        selectionLength -= min(overlap, selectionLength)
+                    }
+                }
+
+                updatedLines.append(String(line.dropFirst(removedCount)))
+            } else {
+                let lineStart = affectedRange.location + originalOffset(ofLineAt: index, in: lines)
+                if selection.location >= lineStart {
+                    selectionLocation += Self.indentUnit.count
+                }
+                if selection.location + selection.length > lineStart {
+                    selectionLength += Self.indentUnit.count
+                }
+                updatedLines.append(Self.indentUnit + line)
+            }
+        }
+
+        let replacement = updatedLines.joined(separator: "\n")
+        guard shouldChangeText(in: affectedRange, replacementString: replacement) else { return }
+        replaceCharacters(in: affectedRange, with: replacement)
+        didChangeText()
+        let replacementLength = (replacement as NSString).length
+        let safeLocation = min(max(0, selectionLocation), affectedRange.location + replacementLength)
+        let safeLength = min(max(0, selectionLength), affectedRange.location + replacementLength - safeLocation)
+        setSelectedRange(NSRange(location: safeLocation, length: safeLength))
+    }
+
+    private func lineRangeForIndentation(from selection: NSRange, in text: NSString) -> NSRange {
+        if selection.length == 0 {
+            return text.lineRange(for: selection)
+        }
+
+        let startLine = text.lineRange(for: NSRange(location: selection.location, length: 0))
+        let endLocation = max(selection.location, selection.location + selection.length - 1)
+        let endLine = text.lineRange(for: NSRange(location: endLocation, length: 0))
+        let upperBound = endLine.location + endLine.length
+        return NSRange(location: startLine.location, length: upperBound - startLine.location)
+    }
+
+    private func originalOffset(ofLineAt index: Int, in lines: [String]) -> Int {
+        guard index > 0 else { return 0 }
+        return lines[..<index].reduce(0) { $0 + $1.count + 1 }
     }
 }
 
@@ -1210,4 +1526,3 @@ extension BlockEditorCoordinator: NSTextViewDelegate {
         }
     }
 }
-
