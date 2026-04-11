@@ -20,8 +20,8 @@
 
 - [x] spell chek like grammarly
 
-- [ ] support for images
+- [x] support for images
 
-- [ ] support for front matter 
+- [x] support for front matter 
 
-- [ ] support for html
+- [x] support for html

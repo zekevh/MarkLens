@@ -312,23 +312,17 @@ final class BlocksManager: ObservableObject {
         let safeCursorRange = clampedRange(rawCursorRange, for: blocks[cursorIndex].content)
         let startIndex: Int
         let endIndex: Int
-        let startID: UUID
-        let endID: UUID
         let startRange: NSRange
         let endRange: NSRange
 
         if anchorIndex <= cursorIndex {
             startIndex = anchorIndex
             endIndex = cursorIndex
-            startID = anchorID
-            endID = cursorID
             startRange = safeAnchorRange
             endRange = safeCursorRange
         } else {
             startIndex = cursorIndex
             endIndex = anchorIndex
-            startID = cursorID
-            endID = anchorID
             startRange = safeCursorRange
             endRange = safeAnchorRange
         }
@@ -1483,7 +1477,7 @@ private final class BlockNSTextView: NSTextView {
         if event.clickCount == 1 && handleLinkClickIfHit(at: point) { return }
 
         let anchorID = blockID
-        weak var weakRegistry = registry
+        let weakRegistry = registry
 
         // NSTextView.mouseDown runs a blocking run-loop using window.nextEvent(),
         // which means mouseDragged(with:) is never called on this subclass during
@@ -1836,7 +1830,6 @@ extension BlockEditorCoordinator: NSTextViewDelegate {
         let ns = textView.string as NSString
         let cursorPos = range.location
         let prevChar  = cursorPos > 0            ? ns.substring(with: NSRange(location: cursorPos - 1, length: 1)) : ""
-        let prev2Char = cursorPos > 1            ? ns.substring(with: NSRange(location: cursorPos - 2, length: 1)) : ""
         let nextChar  = cursorPos < ns.length    ? ns.substring(with: NSRange(location: cursorPos,     length: 1)) : ""
 
         // ── Wrap a selection in delimiters ────────────────────────────────────
