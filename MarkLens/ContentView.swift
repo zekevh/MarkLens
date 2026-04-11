@@ -19,7 +19,7 @@ struct ContentView: View {
                             onTextChange: { appState.saveCurrentFile(text: $0) }
                         )
                         .id(appState.selectedFileURL)
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                        .ignoresSafeArea(.container, edges: .bottom)
                     } else {
                         NodeEditorView(
                             text: $appState.documentText,
@@ -28,11 +28,23 @@ struct ContentView: View {
                             onLinkClick: { appState.handleLinkClick($0) }
                         )
                         .id(appState.selectedFileURL)
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                        .ignoresSafeArea(.container, edges: .bottom)
                     }
                 } else {
                     EmptyEditorView()
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+                        .ignoresSafeArea(.container, edges: .bottom)
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if appState.selectedFileURL != nil, appState.isReplaceVisible {
+                    ReplaceBar(
+                        searchText: appState.searchText,
+                        replaceText: $appState.replaceText,
+                        matchCount: appState.searchMatchCount,
+                        onReplaceNext: { appState.replaceNext() },
+                        onReplaceAll: { appState.replaceAll() },
+                        onClose: { appState.hideReplaceBar() }
+                    )
                 }
             }
         }
@@ -87,6 +99,55 @@ struct ContentView: View {
                         appState.isSearchFocused = false
                     }
                 }
+        }
+    }
+}
+
+private struct ReplaceBar: View {
+    let searchText: String
+    @Binding var replaceText: String
+    let matchCount: Int
+    let onReplaceNext: () -> Void
+    let onReplaceAll: () -> Void
+    let onClose: () -> Void
+
+    private var hasSearch: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                Text("Replace")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextField("Replace", text: $replaceText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 220, maxWidth: 320)
+
+                Text(matchCount == 0 ? "No matches" : "\(matchCount) matches")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Replace") { onReplaceNext() }
+                    .disabled(!hasSearch)
+                Button("Replace All") { onReplaceAll() }
+                    .disabled(!hasSearch)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.bar)
         }
     }
 }

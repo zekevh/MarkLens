@@ -213,6 +213,8 @@ final class AppState: ObservableObject {
     @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
+    @Published var replaceText: String = ""
+    @Published var isReplaceVisible: Bool = false
     @Published var errorMessage: String? = nil
     @Published var externalEditConflict: ExternalEditConflict? = nil
     @Published var isRawMode: Bool = false
@@ -224,6 +226,97 @@ final class AppState: ObservableObject {
     let folderWatcher = FolderWatcher()
 
     var rootFolderURL: URL?
+
+    private var activeUndoManager: UndoManager? {
+        NSApp.keyWindow?.firstResponder?.undoManager ?? NSApp.keyWindow?.undoManager
+    }
+
+    var searchMatchCount: Int {
+        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return 0 }
+
+        let content = documentText as NSString
+        var searchRange = NSRange(location: 0, length: content.length)
+        var count = 0
+
+        while searchRange.location < content.length {
+            let foundRange = content.range(of: needle, options: .caseInsensitive, range: searchRange)
+            if foundRange.location == NSNotFound { break }
+            count += 1
+            searchRange.location = NSMaxRange(foundRange)
+            searchRange.length = content.length - searchRange.location
+        }
+        return count
+    }
+
+    func showFindBar(showReplace: Bool = false) {
+        guard selectedFileURL != nil else { return }
+        if showReplace {
+            isReplaceVisible.toggle()
+            if !isReplaceVisible {
+                replaceText = ""
+            }
+        }
+        isSearchFocused = true
+    }
+
+    func hideReplaceBar() {
+        replaceText = ""
+        isReplaceVisible = false
+    }
+
+    func replaceNext() {
+        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return }
+
+        let content = documentText as NSString
+        let foundRange = content.range(of: needle, options: .caseInsensitive)
+        guard foundRange.location != NSNotFound else { return }
+
+        let originalText = documentText
+        let updatedText = content.replacingCharacters(in: foundRange, with: replaceText)
+        applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace")
+    }
+
+    func replaceAll() {
+        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return }
+
+        let mutable = NSMutableString(string: documentText)
+        var searchRange = NSRange(location: 0, length: mutable.length)
+        var replacedAny = false
+
+        while searchRange.location < mutable.length {
+            let foundRange = mutable.range(of: needle, options: .caseInsensitive, range: searchRange)
+            if foundRange.location == NSNotFound { break }
+
+            mutable.replaceCharacters(in: foundRange, with: replaceText)
+            replacedAny = true
+
+            let nextLocation = foundRange.location + (replaceText as NSString).length
+            searchRange = NSRange(location: nextLocation, length: mutable.length - nextLocation)
+        }
+
+        guard replacedAny else { return }
+        let originalText = documentText
+        let updatedText = mutable as String
+        applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace All")
+    }
+
+    private func applyReplaceResult(_ updatedText: String, originalText: String, actionName: String) {
+        guard updatedText != originalText else { return }
+
+        let undoManager = activeUndoManager
+        undoManager?.registerUndo(withTarget: self) { state in
+            MainActor.assumeIsolated {
+                state.applyReplaceResult(originalText, originalText: updatedText, actionName: actionName)
+            }
+        }
+        undoManager?.setActionName(actionName)
+
+        documentText = updatedText
+        saveCurrentFile(text: updatedText)
+    }
 
     // MARK: Tree helpers
 
@@ -760,8 +853,11 @@ private struct AppCommands: Commands {
             .keyboardShortcut("f", modifiers: [.command, .control])
         }
         CommandGroup(after: .textEditing) {
-            Button("Find…") { activeState?.isSearchFocused = true }
+            Button("Find…") { activeState?.showFindBar() }
                 .keyboardShortcut("f", modifiers: .command)
+                .disabled(activeState?.selectedFileURL == nil)
+            Button("Replace…") { activeState?.showFindBar(showReplace: true) }
+                .keyboardShortcut("f", modifiers: [.command, .option])
                 .disabled(activeState?.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {

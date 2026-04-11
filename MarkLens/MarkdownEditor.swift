@@ -3,12 +3,10 @@ import AppKit
 
 // MARK: - Custom Attribute Keys
 
-extension NSAttributedString.Key {
-    nonisolated(unsafe) static let markdownHR       = NSAttributedString.Key("md.hr")
-    nonisolated(unsafe) static let markdownCheckbox = NSAttributedString.Key("md.checkbox") // Bool: true = checked
-    nonisolated(unsafe) static let markdownTableRow  = NSAttributedString.Key("md.tableRow")  // marks a table row for border drawing
-    nonisolated(unsafe) static let markdownTablePipe = NSAttributedString.Key("md.tablePipe") // marks a | for vertical line drawing
-}
+nonisolated(unsafe) private let markdownHRKey = NSAttributedString.Key("md.hr")
+nonisolated(unsafe) private let markdownCheckboxKey = NSAttributedString.Key("md.checkbox") // Bool: true = checked
+nonisolated(unsafe) private let markdownTableRowKey = NSAttributedString.Key("md.tableRow")  // marks a table row for border drawing
+nonisolated(unsafe) private let markdownTablePipeKey = NSAttributedString.Key("md.tablePipe") // marks a | for vertical line drawing
 
 // MARK: - MarkdownLayoutManager
 // Draws horizontal rule lines and task-list checkboxes.
@@ -26,7 +24,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        storage.enumerateAttribute(.markdownHR, in: charRange, options: []) { val, rng, _ in
+        storage.enumerateAttribute(markdownHRKey, in: charRange, options: []) { val, rng, _ in
             guard val != nil else { return }
             let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
@@ -41,7 +39,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
             path.stroke()
         }
 
-        storage.enumerateAttribute(.markdownCheckbox, in: charRange, options: []) { val, rng, _ in
+        storage.enumerateAttribute(markdownCheckboxKey, in: charRange, options: []) { val, rng, _ in
             guard let isChecked = val as? Bool else { return }
             let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
@@ -76,7 +74,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
         }
 
         // Draw vertical column dividers at each hidden | character
-        storage.enumerateAttribute(.markdownTablePipe, in: charRange, options: []) { val, rng, _ in
+        storage.enumerateAttribute(markdownTablePipeKey, in: charRange, options: []) { val, rng, _ in
             guard val != nil else { return }
             let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
@@ -95,7 +93,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
         // Draw horizontal borders for each table row, bounded by the outer pipes.
         // Top border only on the first row; all rows get a bottom border — avoids
         // drawing two lines between adjacent rows.
-        storage.enumerateAttribute(.markdownTableRow, in: charRange, options: []) { val, rng, _ in
+        storage.enumerateAttribute(markdownTableRowKey, in: charRange, options: []) { val, rng, _ in
             guard val != nil else { return }
             let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
@@ -107,7 +105,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
                                    .offsetBy(dx: origin.x, dy: origin.y)
                 let lcr = self.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
                 var minX: CGFloat = .infinity, maxX: CGFloat = -.infinity
-                storage.enumerateAttribute(.markdownTablePipe, in: lcr, options: []) { pv, pr, _ in
+                storage.enumerateAttribute(markdownTablePipeKey, in: lcr, options: []) { pv, pr, _ in
                     guard pv != nil else { return }
                     let pgr = self.glyphRange(forCharacterRange: pr, actualCharacterRange: nil)
                     guard pgr.length > 0 else { return }
@@ -296,7 +294,7 @@ class EditorCoordinator: NSObject {
                             ns.substring(with: checkboxRange).lowercased() == "[x]"
             if checkboxRange.length > 0 {
                 storage.addAttribute(.foregroundColor,    value: NSColor.clear, range: checkboxRange)
-                storage.addAttribute(.markdownCheckbox,   value: isChecked,     range: checkboxRange)
+                storage.addAttribute(markdownCheckboxKey, value: isChecked,     range: checkboxRange)
             }
             if isChecked && contentRange.length > 0 {
                 storage.addAttribute(.foregroundColor,    value: NSColor.tertiaryLabelColor,       range: contentRange)
@@ -328,7 +326,7 @@ class EditorCoordinator: NSObject {
         Patterns.horizontalRule.enumerateMatches(in: storage.string, range: range) { m, _, _ in
             guard let m else { return }
             storage.addAttribute(.foregroundColor, value: NSColor.clear, range: m.range)
-            storage.addAttribute(.markdownHR, value: true, range: m.range)
+            storage.addAttribute(markdownHRKey, value: true, range: m.range)
             storage.addAttribute(.paragraphStyle, value: Styles.hrParagraphStyle, range: m.range)
         }
     }
@@ -464,12 +462,12 @@ class EditorCoordinator: NSObject {
 
             // Tag all rows for top + bottom border drawing; hide | chars for vertical line drawing
             for row in rows {
-                storage.addAttribute(.markdownTableRow, value: true, range: row.lineRange)
+                storage.addAttribute(markdownTableRowKey, value: true, range: row.lineRange)
                 for i in row.lineRange.location..<NSMaxRange(row.lineRange) {
                     guard ns.character(at: i) == 0x7C else { continue }
                     let r = NSRange(location: i, length: 1)
                     storage.addAttribute(.foregroundColor,   value: NSColor.clear, range: r)
-                    storage.addAttribute(.markdownTablePipe, value: true,          range: r)
+                    storage.addAttribute(markdownTablePipeKey, value: true,          range: r)
                 }
             }
 
