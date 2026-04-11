@@ -214,6 +214,7 @@ struct ExternalEditConflict {
 final class AppState: ObservableObject {
     @Published var rootNodes: [FileNode] = []
     @Published var selectedFileURL: URL? = nil
+    @Published var selectedSidebarURLs: Set<URL> = []
     @Published var documentText: String = ""
     @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
     @Published var recentURLs: [URL] = []
@@ -352,7 +353,7 @@ final class AppState: ObservableObject {
 
     // MARK: File loading
 
-    func loadFile(_ url: URL) {
+    func loadFile(_ url: URL, syncSidebarSelection: Bool = true) {
         guard !url.hasDirectoryPath else { return }
         do {
             documentText = try String(contentsOf: url, encoding: .utf8)
@@ -362,8 +363,45 @@ final class AppState: ObservableObject {
         }
         lastSavedText = documentText
         selectedFileURL = url
+        if syncSidebarSelection {
+            selectedSidebarURLs = [url]
+        }
         fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
         recordRecent(url)
+    }
+
+    func updateSidebarSelection(_ newSelection: Set<URL>) {
+        let previousSelection = selectedSidebarURLs
+        selectedSidebarURLs = newSelection
+
+        guard let candidate = preferredSidebarFileSelection(
+            oldSelection: previousSelection,
+            newSelection: newSelection
+        ) else { return }
+
+        if selectedFileURL != candidate {
+            loadFile(candidate, syncSidebarSelection: false)
+        }
+    }
+
+    private func preferredSidebarFileSelection(oldSelection: Set<URL>, newSelection: Set<URL>) -> URL? {
+        if let current = selectedFileURL,
+           newSelection.contains(current),
+           !current.hasDirectoryPath {
+            return current
+        }
+
+        let orderedURLs = visibleSidebarURLs(from: rootNodes)
+        let addedURLs = newSelection.subtracting(oldSelection)
+        let candidateSet = addedURLs.isEmpty ? newSelection : addedURLs
+
+        return orderedURLs.last(where: { candidateSet.contains($0) && !$0.hasDirectoryPath })
+    }
+
+    private func visibleSidebarURLs(from nodes: [FileNode]) -> [URL] {
+        nodes.flatMap { node in
+            [node.url] + visibleSidebarURLs(from: node.children ?? [])
+        }
     }
 
     /// Handles a link click from the node editor. External URLs (http/https/mailto) are
@@ -584,6 +622,7 @@ final class AppState: ObservableObject {
         saveFolderBookmark(nil)
         rootNodes = []
         selectedFileURL = nil
+        selectedSidebarURLs = []
         documentText = ""
     }
 
@@ -728,6 +767,7 @@ final class AppState: ObservableObject {
             present(error, context: "Could not move \"\(url.lastPathComponent)\" to Trash")
             return
         }
+        selectedSidebarURLs.remove(url)
         if selectedFileURL == url { selectedFileURL = nil; documentText = "" }
         if rootFolderURL != nil {
             rebuildTree()
@@ -767,52 +807,96 @@ final class AppState: ObservableObject {
                     : node
             }
         }
+        if selectedSidebarURLs.contains(url) {
+            selectedSidebarURLs.remove(url)
+            selectedSidebarURLs.insert(newURL)
+        }
         if selectedFileURL == url { loadFile(newURL) }
     }
 
     func moveNode(_ sourceURL: URL, into destinationFolderURL: URL) {
-        guard sourceURL != destinationFolderURL else { return }
+        moveNodes([sourceURL], into: destinationFolderURL)
+    }
+
+    func moveNodes(_ sourceURLs: [URL], into destinationFolderURL: URL) {
         guard destinationFolderURL.hasDirectoryPath else { return }
-        guard sourceURL.deletingLastPathComponent() != destinationFolderURL else { return }
 
-        let sourcePath = sourceURL.standardizedFileURL.path
-        let destinationPath = destinationFolderURL.standardizedFileURL.path
-        if destinationPath.hasPrefix(sourcePath + "/") {
-            errorMessage = "Cannot move a folder into one of its own subfolders."
-            return
+        let uniqueSourceURLs = Array(Set(sourceURLs)).sorted { $0.path < $1.path }
+        guard !uniqueSourceURLs.isEmpty else { return }
+
+        let filteredSourceURLs = uniqueSourceURLs.filter { sourceURL in
+            let standardizedSourcePath = sourceURL.standardizedFileURL.path
+            return !uniqueSourceURLs.contains(where: {
+                $0 != sourceURL &&
+                standardizedSourcePath.hasPrefix($0.standardizedFileURL.path + "/")
+            })
+        }
+        guard !filteredSourceURLs.isEmpty else { return }
+
+        for sourceURL in filteredSourceURLs {
+            guard sourceURL != destinationFolderURL else { continue }
+            guard sourceURL.deletingLastPathComponent() != destinationFolderURL else { continue }
+
+            let sourcePath = sourceURL.standardizedFileURL.path
+            let destinationPath = destinationFolderURL.standardizedFileURL.path
+            if destinationPath.hasPrefix(sourcePath + "/") {
+                errorMessage = "Cannot move a folder into one of its own subfolders."
+                return
+            }
+
+            let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
+            guard !FileManager.default.fileExists(atPath: targetURL.path) else {
+                errorMessage = "\"\(targetURL.lastPathComponent)\" already exists in \"\(destinationFolderURL.lastPathComponent)\"."
+                return
+            }
         }
 
-        let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
-        guard !FileManager.default.fileExists(atPath: targetURL.path) else {
-            errorMessage = "\"\(targetURL.lastPathComponent)\" already exists in \"\(destinationFolderURL.lastPathComponent)\"."
-            return
+        var movedSelections: Set<URL> = []
+        var reloadedURL: URL? = nil
+        var updatedPinned = pinnedURLs
+
+        for sourceURL in filteredSourceURLs {
+            let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
+
+            do {
+                try FileManager.default.moveItem(at: sourceURL, to: targetURL)
+            } catch {
+                present(error, context: "Could not move \"\(sourceURL.lastPathComponent)\"")
+                return
+            }
+
+            if updatedPinned.contains(sourceURL.absoluteString) {
+                updatedPinned.remove(sourceURL.absoluteString)
+                updatedPinned.insert(targetURL.absoluteString)
+            }
+
+            if recentURLs.contains(where: { $0.path == sourceURL.path }) {
+                recentURLs.removeAll { $0.path == sourceURL.path }
+                recentBookmarks.removeValue(forKey: sourceURL.path)
+                recordRecent(targetURL)
+            }
+
+            if selectedSidebarURLs.contains(sourceURL) {
+                movedSelections.insert(targetURL)
+            }
+
+            if selectedFileURL == sourceURL {
+                reloadedURL = targetURL
+            }
         }
 
-        do {
-            try FileManager.default.moveItem(at: sourceURL, to: targetURL)
-        } catch {
-            present(error, context: "Could not move \"\(sourceURL.lastPathComponent)\"")
-            return
-        }
+        pinnedURLs = updatedPinned
+        UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
 
-        if pinnedURLs.contains(sourceURL.absoluteString) {
-            pinnedURLs.remove(sourceURL.absoluteString)
-            pinnedURLs.insert(targetURL.absoluteString)
-            UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
-        }
-
-        if recentURLs.contains(where: { $0.path == sourceURL.path }) {
-            recentURLs.removeAll { $0.path == sourceURL.path }
-            recentBookmarks.removeValue(forKey: sourceURL.path)
-            recordRecent(targetURL)
-        }
+        selectedSidebarURLs.subtract(filteredSourceURLs)
+        selectedSidebarURLs.formUnion(movedSelections)
 
         if rootFolderURL != nil {
             rebuildTree()
         }
 
-        if selectedFileURL == sourceURL {
-            loadFile(targetURL)
+        if let reloadedURL {
+            loadFile(reloadedURL, syncSidebarSelection: false)
         }
     }
 

@@ -301,26 +301,29 @@ struct SidebarView: View {
                 }
             } else {
                 List(appState.rootNodes, children: \.optionalChildren,
-
                      selection: Binding(
-                        get: { appState.selectedFileURL },
-                        set: { url in
-                            if let url, !url.hasDirectoryPath {
-                                appState.loadFile(url)
-                            }
+                        get: { appState.selectedSidebarURLs },
+                        set: { urls in
+                            appState.updateSidebarSelection(urls)
                         }
                      )
                 ) { node in
                     SidebarRow(node: node)
                         .tag(node.url)
                         .draggable(node.url.path) {
-                            SidebarDragPreview(node: node)
+                            SidebarDragPreview(
+                                node: node,
+                                selectedCount: appState.selectedSidebarURLs.contains(node.url)
+                                    ? appState.selectedSidebarURLs.count
+                                    : 1
+                            )
                         }
                         .dropDestination(for: String.self) { items, _ in
                             guard node.isDirectory,
-                                  let sourcePath = items.first
+                                  !items.isEmpty
                             else { return false }
-                            appState.moveNode(URL(fileURLWithPath: sourcePath), into: node.url)
+                            let sourceURLs = items.map { URL(fileURLWithPath: $0) }
+                            appState.moveNodes(sourceURLs, into: node.url)
                             return true
                         }
                         .contextMenu {
@@ -470,6 +473,7 @@ struct SidebarRow: View {
 
 private struct SidebarDragPreview: View {
     let node: FileNode
+    let selectedCount: Int
 
     var body: some View {
         HStack(spacing: 6) {
@@ -478,6 +482,13 @@ private struct SidebarDragPreview: View {
             Text(node.name)
                 .lineLimit(1)
                 .foregroundStyle(.primary)
+            if selectedCount > 1 {
+                Text("\(selectedCount)")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.thinMaterial, in: Capsule())
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
