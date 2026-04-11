@@ -1,13 +1,6 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Custom Attribute Keys
-
-nonisolated(unsafe) private let markdownHRKey = NSAttributedString.Key("md.hr")
-nonisolated(unsafe) private let markdownCheckboxKey = NSAttributedString.Key("md.checkbox") // Bool: true = checked
-nonisolated(unsafe) private let markdownTableRowKey = NSAttributedString.Key("md.tableRow")  // marks a table row for border drawing
-nonisolated(unsafe) private let markdownTablePipeKey = NSAttributedString.Key("md.tablePipe") // marks a | for vertical line drawing
-
 // MARK: - MarkdownLayoutManager
 // Draws horizontal rule lines and task-list checkboxes.
 
@@ -20,6 +13,10 @@ final class MarkdownLayoutManager: NSLayoutManager {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage else { return }
         let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        let markdownHRKey = NSAttributedString.Key("md.hr")
+        let markdownCheckboxKey = NSAttributedString.Key("md.checkbox")
+        let markdownTableRowKey = NSAttributedString.Key("md.tableRow")
+        let markdownTablePipeKey = NSAttributedString.Key("md.tablePipe")
 
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -211,6 +208,8 @@ class EditorCoordinator: NSObject {
     }
 
     private func applyInline(to range: NSRange, storage: NSTextStorage) {
+        let markdownCheckboxKey = NSAttributedString.Key("md.checkbox")
+        let markdownHRKey = NSAttributedString.Key("md.hr")
         let ns = storage.string as NSString
 
         // Headings
@@ -363,6 +362,8 @@ class EditorCoordinator: NSObject {
     }
 
     private func applyTables(to range: NSRange, storage: NSTextStorage) {
+        let markdownTableRowKey = NSAttributedString.Key("md.tableRow")
+        let markdownTablePipeKey = NSAttributedString.Key("md.tablePipe")
         let ns = storage.string as NSString
         let font = Styles.tableFont
         // In a monospace font every glyph has the same advance width; measure one char.

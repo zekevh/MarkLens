@@ -544,18 +544,7 @@ struct NodeEditorView: View {
                 guard let manager else { return }
                 let registered = manager.registry.allRegistered()
                 guard let anchorTV = registered.first(where: { $0.0 == anchorID })?.1 else { return }
-                let anchorFrame = anchorTV.convert(anchorTV.bounds, to: nil)
-
-                // Resolve char index in a text view at a given window-Y coordinate.
-                // Uses midX of the view as a stable horizontal probe point.
-                func charIndex(in tv: NSTextView, windowY: CGFloat) -> Int {
-                    guard let lm = tv.layoutManager, let tc = tv.textContainer else { return 0 }
-                    let viewPt = tv.convert(NSPoint(x: tv.bounds.midX, y: windowY), from: nil)
-                    let tcPt = NSPoint(x: viewPt.x - tv.textContainerOrigin.x,
-                                      y: viewPt.y - tv.textContainerOrigin.y)
-                    let glyphIdx = lm.glyphIndex(for: tcPt, in: tc, fractionOfDistanceThroughGlyph: nil)
-                    return lm.characterIndexForGlyph(at: glyphIdx)
-                }
+                let anchorFrame = windowFrame(of: anchorTV)
 
                 // Mouse returned inside anchor bounds — cancel cross-block highlight
                 guard mouseY < anchorFrame.minY || mouseY > anchorFrame.maxY else {
@@ -569,7 +558,7 @@ struct NodeEditorView: View {
                 for (id, tv) in registered {
                     guard id != anchorID else { continue }
                     let blockTV = tv as? BlockNSTextView
-                    let f = tv.convert(tv.bounds, to: nil)
+                    let f = windowFrame(of: tv)
                     let totalLength = tv.string.count
 
                     if goingDown {
@@ -578,7 +567,7 @@ struct NodeEditorView: View {
                         }
                         if mouseY >= f.minY && mouseY <= f.maxY {
                             // Cursor block — partial selection from char 0 to cursor
-                            let end = min(charIndex(in: tv, windowY: mouseY) + 1, totalLength)
+                            let end = min(crossBlockCharIndex(in: tv, windowY: mouseY) + 1, totalLength)
                             blockTV?.crossBlockSelectionRange = NSRange(location: 0, length: end)
                             newCursorID = id
                         } else if f.maxY >= mouseY {
@@ -594,7 +583,7 @@ struct NodeEditorView: View {
                         }
                         if mouseY >= f.minY && mouseY <= f.maxY {
                             // Cursor block — partial selection from cursor to end
-                            let start = charIndex(in: tv, windowY: mouseY)
+                            let start = crossBlockCharIndex(in: tv, windowY: mouseY)
                             blockTV?.crossBlockSelectionRange = NSRange(location: start, length: totalLength - start)
                             newCursorID = id
                         } else if f.minY <= mouseY {
@@ -1183,6 +1172,23 @@ private func scrollCursorToVisible(in textView: NSTextView) {
     }
 }
 
+@MainActor
+private func windowFrame(of view: NSView) -> CGRect {
+    view.convert(view.bounds, to: nil)
+}
+
+@MainActor
+private func crossBlockCharIndex(in textView: NSTextView, windowY: CGFloat) -> Int {
+    guard let lm = textView.layoutManager, let tc = textView.textContainer else { return 0 }
+    let viewPoint = textView.convert(NSPoint(x: textView.bounds.midX, y: windowY), from: nil)
+    let containerPoint = NSPoint(
+        x: viewPoint.x - textView.textContainerOrigin.x,
+        y: viewPoint.y - textView.textContainerOrigin.y
+    )
+    let glyphIndex = lm.glyphIndex(for: containerPoint, in: tc, fractionOfDistanceThroughGlyph: nil)
+    return lm.characterIndexForGlyph(at: glyphIndex)
+}
+
 // MARK: - List continuation helper
 
 private struct ListContinuationResult {
@@ -1484,10 +1490,12 @@ private final class BlockNSTextView: NSTextView {
         // a drag-to-select gesture. Installing a Timer in .eventTracking mode is
         // the only way to observe mouse position while that loop is active.
         let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { _ in
-            guard NSEvent.pressedMouseButtons & 1 == 1 else { return }
-            guard let window = NSApp.keyWindow else { return }
-            let winPt = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-            weakRegistry?.onCrossBlockDrag?(anchorID, winPt.y)
+            Task { @MainActor in
+                guard NSEvent.pressedMouseButtons & 1 == 1 else { return }
+                guard let window = NSApp.keyWindow else { return }
+                let winPt = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+                weakRegistry?.onCrossBlockDrag?(anchorID, winPt.y)
+            }
         }
         RunLoop.current.add(timer, forMode: .eventTracking)
 
