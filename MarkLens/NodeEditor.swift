@@ -375,6 +375,7 @@ final class BlocksManager: ObservableObject {
 struct NodeEditorView: View {
     @Binding var text: String
     var searchText: String
+    var fileURL: URL?
     var onTextChange: (String) -> Void
     var onLinkClick: ((String) -> Void)? = nil
 
@@ -391,6 +392,7 @@ struct NodeEditorView: View {
                         block: $block,
                         index: index,
                         searchText: searchText,
+                        fileURL: fileURL,
                         isDropTarget: dropTargetID == block.id,
                         debugBlocks: debugBlocks,
                         isBlockSelected: manager.allBlocksSelected,
@@ -672,6 +674,7 @@ struct BlockRowView: View {
     @Binding var block: MarkdownBlock
     var index: Int
     var searchText: String
+    var fileURL: URL?
     var isDropTarget: Bool
     var debugBlocks: Bool
     var isBlockSelected: Bool
@@ -694,21 +697,27 @@ struct BlockRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Drag strip — pure SwiftUI, left of the NSTextView so no z-order conflict
-            DragStrip(blockID: block.id, height: max(height, 24))
+            DragStrip(blockID: block.id, height: max(height, previewHeight + 24))
 
-            BlockEditorView(
-                blockID: block.id,
-                content: $block.content,
-                searchText: searchText,
-                registry: registry,
-                onHeightChange: { h in height = h },
-                onSplitBlock: onSplitBlock,
-                onMergeWithPrevious: onMergeWithPrevious,
-                onNavigatePrevious: onNavigatePrevious,
-                onNavigateNext: onNavigateNext
-            )
-            .frame(height: max(height, 24))
+            VStack(alignment: .leading, spacing: 10) {
+                if let imageInfo = imageInfo,
+                   let resolvedURL = MarkdownEngine.resolveImageURL(imageInfo.destination, relativeTo: fileURL) {
+                    ImageBlockPreview(url: resolvedURL, alt: imageInfo.alt)
+                }
+
+                BlockEditorView(
+                    blockID: block.id,
+                    content: $block.content,
+                    searchText: searchText,
+                    registry: registry,
+                    onHeightChange: { h in height = h },
+                    onSplitBlock: onSplitBlock,
+                    onMergeWithPrevious: onMergeWithPrevious,
+                    onNavigatePrevious: onNavigatePrevious,
+                    onNavigateNext: onNavigateNext
+                )
+                .frame(height: max(height, 24))
+            }
         }
         .overlay(alignment: .top) {
             // Drop insertion indicator
@@ -732,6 +741,62 @@ struct BlockRowView: View {
         }
         .padding(.top, index == 0 ? 0 : blockPadding.top)
         .padding(.bottom, blockPadding.bottom)
+    }
+
+    private var imageInfo: ImageInfo? {
+        if case let .imageBlock(info) = block.kind { return info }
+        return nil
+    }
+
+    private var previewHeight: CGFloat {
+        imageInfo == nil ? 0 : 220
+    }
+}
+
+private struct ImageBlockPreview: View {
+    let url: URL
+    let alt: String
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case let .success(image):
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 220, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            case .failure:
+                previewFallback(systemImage: "photo.badge.exclamationmark", text: alt.isEmpty ? url.lastPathComponent : alt)
+            case .empty:
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 220)
+                    .overlay(ProgressView())
+            @unknown default:
+                previewFallback(systemImage: "photo", text: alt.isEmpty ? url.lastPathComponent : alt)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func previewFallback(systemImage: String, text: String) -> some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(Color.secondary.opacity(0.08))
+            .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 220)
+            .overlay {
+                VStack(spacing: 8) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 24))
+                        .foregroundStyle(.secondary)
+                    Text(text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12)
+                }
+            }
     }
 }
 

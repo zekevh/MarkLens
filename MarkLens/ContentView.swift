@@ -24,6 +24,7 @@ struct ContentView: View {
                         NodeEditorView(
                             text: $appState.documentText,
                             searchText: appState.searchText,
+                            fileURL: appState.selectedFileURL,
                             onTextChange: { appState.saveCurrentFile(text: $0) },
                             onLinkClick: { appState.handleLinkClick($0) }
                         )
