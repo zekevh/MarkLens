@@ -34,8 +34,8 @@ struct MarkdownDocumentModel {
 }
 
 enum MarkdownEngine {
-    static func classifyBlockSource(_ source: String) -> MarkdownBlockKind {
-        classifyBlock(source)
+    static func classifyBlockSource(_ source: String, isFirstBlock: Bool = false) -> MarkdownBlockKind {
+        classifyBlock(source, isFirstBlock: isFirstBlock)
     }
 
     static func buildDocument(from source: String) -> MarkdownDocumentModel {
@@ -87,9 +87,13 @@ enum MarkdownEngine {
         return URL(fileURLWithPath: destination, relativeTo: baseURL).standardizedFileURL
     }
 
-    private static func classifyBlock(_ source: String) -> MarkdownBlockKind {
+    private static func classifyBlock(_ source: String, isFirstBlock: Bool = false) -> MarkdownBlockKind {
         let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .unknown }
+
+        if isFirstBlock && looksLikeFrontMatterBlock(source) {
+            return .frontMatter
+        }
 
         if looksLikeTable(trimmed) {
             return .table
@@ -148,6 +152,14 @@ enum MarkdownEngine {
 
     private static func looksLikeHTMLBlock(_ trimmed: String) -> Bool {
         trimmed.hasPrefix("<") && trimmed.hasSuffix(">")
+    }
+
+    private static func looksLikeFrontMatterBlock(_ source: String) -> Bool {
+        let normalized = source.replacingOccurrences(of: "\r\n", with: "\n")
+        guard normalized.hasPrefix("---\n") else { return false }
+        let lines = normalized.components(separatedBy: "\n")
+        guard lines.count > 1 else { return false }
+        return lines.dropFirst().contains(where: { $0 == "---" || $0 == "..." })
     }
 
     private static func splitFrontMatter(from source: String) -> (MarkdownFrontMatter?, String) {
