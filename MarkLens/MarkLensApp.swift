@@ -702,6 +702,12 @@ private struct AppCommands: Commands {
         appState ?? (NSApp.delegate as? AppDelegate)?.keyAppState
     }
 
+    /// Resolve the same UndoManager the focused editor/view is using so menu state
+    /// reflects the frontmost responder chain. Falls back to the key window's manager.
+    private var activeUndoManager: UndoManager? {
+        NSApp.keyWindow?.firstResponder?.undoManager ?? NSApp.keyWindow?.undoManager
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New File") { activeState?.createFile() }
@@ -709,6 +715,21 @@ private struct AppCommands: Commands {
                 .disabled(activeState == nil)
             Button("New Window") { openWindow(id: "main") }
                 .keyboardShortcut("n", modifiers: [.command, .option])
+        }
+        CommandGroup(replacing: .undoRedo) {
+            Button(activeUndoManager?.undoMenuItemTitle ?? "Undo") {
+                guard let undoManager = activeUndoManager, undoManager.canUndo else { return }
+                undoManager.undo()
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(!(activeUndoManager?.canUndo ?? false))
+
+            Button(activeUndoManager?.redoMenuItemTitle ?? "Redo") {
+                guard let undoManager = activeUndoManager, undoManager.canRedo else { return }
+                undoManager.redo()
+            }
+            .keyboardShortcut("Z", modifiers: [.command, .shift])
+            .disabled(!(activeUndoManager?.canRedo ?? false))
         }
         CommandGroup(after: .newItem) {
             Divider()

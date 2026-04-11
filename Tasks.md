@@ -8,7 +8,7 @@
 
 - [x] slow to open direcotry (cmd + shift + o) pretty broken also cmd + o to open file. best implementaion that work is the button "Open Folder..." in the left bottom of the left side bar.
 
-- [ ] undo hisotry where there is nothing undo crash the app
+- [x] undo hisotry where there is nothing undo crash the app
 
 ## Features
 
