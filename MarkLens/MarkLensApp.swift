@@ -43,6 +43,7 @@ final class AppState: ObservableObject {
     let folderWatcher = FolderWatcher()
     private let search = DocumentSearch()
     private var treeRebuildGeneration = 0
+    private var workspaceSnapshot: WorkspaceSnapshot?
 
     var rootFolderURL: URL?
 
@@ -112,6 +113,7 @@ final class AppState: ObservableObject {
             let snapshot = await WorkspaceRefreshService.buildSnapshot(at: folder, pinnedURLs: pinnedURLs)
             guard let self else { return }
             guard self.treeRebuildGeneration == generation, self.rootFolderURL == snapshot.rootFolder else { return }
+            self.workspaceSnapshot = snapshot
             self.rootNodes = snapshot.nodes
             self.applyFolderWatch(snapshot)
             onComplete?(snapshot.nodes)
@@ -120,8 +122,37 @@ final class AppState: ObservableObject {
 
     /// Update directory watches to match every directory currently in the tree.
     private func applyFolderWatch(_ snapshot: WorkspaceSnapshot) {
-        WorkspaceRefreshService.applyWatch(snapshot, using: folderWatcher) { [weak self] in
-            self?.rebuildTree()
+        WorkspaceRefreshService.applyWatch(snapshot, using: folderWatcher) { [weak self] changedDirectories in
+            self?.refreshWorkspace(changedDirectories: changedDirectories)
+        }
+    }
+
+    private func refreshWorkspace(changedDirectories: Set<URL>) {
+        guard let snapshot = workspaceSnapshot, let rootFolderURL else {
+            rebuildTree()
+            return
+        }
+
+        guard changedDirectories.count == 1, let changedDirectory = changedDirectories.first else {
+            rebuildTree()
+            return
+        }
+
+        treeRebuildGeneration += 1
+        let generation = treeRebuildGeneration
+        let pinnedURLs = pinnedURLs
+
+        Task { @MainActor [weak self] in
+            let refreshedSnapshot = await WorkspaceRefreshService.refreshSnapshot(
+                from: snapshot,
+                changedDirectory: changedDirectory,
+                pinnedURLs: pinnedURLs
+            )
+            guard let self else { return }
+            guard self.treeRebuildGeneration == generation, self.rootFolderURL == rootFolderURL else { return }
+            self.workspaceSnapshot = refreshedSnapshot
+            self.rootNodes = refreshedSnapshot.nodes
+            self.applyFolderWatch(refreshedSnapshot)
         }
     }
 
@@ -408,6 +439,7 @@ final class AppState: ObservableObject {
         folderWatcher.stopAll()
         treeRebuildGeneration += 1
         rootFolderURL = nil
+        workspaceSnapshot = nil
         saveFolderBookmark(nil)
         rootNodes = []
         selectedFileURL = nil
@@ -466,6 +498,7 @@ final class AppState: ObservableObject {
         panel.begin { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
             self.rootFolderURL = nil
+            self.workspaceSnapshot = nil
             self.saveFolderBookmark(nil)
             self.folderWatcher.stopAll()
             self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]

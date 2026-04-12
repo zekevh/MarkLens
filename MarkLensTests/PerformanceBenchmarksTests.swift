@@ -31,6 +31,46 @@ final class PerformanceBenchmarksTests: XCTestCase {
         }
     }
 
+    func testWorkspaceSnapshotBuildBenchmark_largeWorkspace() async throws {
+        try makeWorkspaceFixture(
+            root: tempDirectoryURL,
+            directoryCount: 120,
+            markdownFilesPerDirectory: 24,
+            ignoredDirectoriesEvery: 8
+        )
+
+        await benchmarkAsync(name: "workspace_snapshot_build_large_workspace") {
+            _ = await WorkspaceRefreshService.buildSnapshot(at: tempDirectoryURL, pinnedURLs: [])
+        }
+    }
+
+    func testWorkspaceRefreshAfterSingleFileChangeBenchmark_largeWorkspace() async throws {
+        try makeWorkspaceFixture(
+            root: tempDirectoryURL,
+            directoryCount: 120,
+            markdownFilesPerDirectory: 24,
+            ignoredDirectoriesEvery: 8
+        )
+
+        let snapshot = await WorkspaceRefreshService.buildSnapshot(at: tempDirectoryURL, pinnedURLs: [])
+        let changedDirectory = tempDirectoryURL.appendingPathComponent("Section-063", isDirectory: true)
+        let changedFile = changedDirectory.appendingPathComponent("Note-12.md")
+        let originalContent = try String(contentsOf: changedFile, encoding: .utf8)
+        let updatedContent = originalContent + "\nrefresh-marker"
+        var useUpdatedContent = false
+
+        await benchmarkAsync(name: "workspace_refresh_after_single_file_change_large_workspace") {
+            useUpdatedContent.toggle()
+            let nextContent = useUpdatedContent ? updatedContent : originalContent
+            try! nextContent.write(to: changedFile, atomically: true, encoding: .utf8)
+            _ = await WorkspaceRefreshService.refreshSnapshot(
+                from: snapshot,
+                changedDirectory: changedDirectory,
+                pinnedURLs: []
+            )
+        }
+    }
+
     @MainActor
     func testDocumentSearchBenchmark_largeDocument() {
         let document = makeLargeDocument(blockCount: 4_000, lineLength: 90)
@@ -94,6 +134,38 @@ final class PerformanceBenchmarksTests: XCTestCase {
         for _ in 0..<measuredIterations {
             let start = clock.now
             block()
+            let elapsed = start.duration(to: clock.now)
+            let ms = Double(elapsed.components.seconds) * 1_000
+                + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+            samplesMs.append(ms)
+        }
+
+        let average = samplesMs.reduce(0, +) / Double(samplesMs.count)
+        let minimum = samplesMs.min() ?? 0
+        let maximum = samplesMs.max() ?? 0
+        let sorted = samplesMs.sorted()
+        let median = sorted[sorted.count / 2]
+
+        let line = "BENCHMARK\t\(name)\titerations=\(measuredIterations)\tavg_ms=\(format(average))\tmedian_ms=\(format(median))\tmin_ms=\(format(minimum))\tmax_ms=\(format(maximum))"
+        print(line)
+    }
+
+    private func benchmarkAsync(
+        name: String,
+        warmupIterations: Int = 2,
+        measuredIterations: Int = 8,
+        block: () async -> Void
+    ) async {
+        for _ in 0..<warmupIterations {
+            await block()
+        }
+
+        var samplesMs: [Double] = []
+        samplesMs.reserveCapacity(measuredIterations)
+
+        for _ in 0..<measuredIterations {
+            let start = clock.now
+            await block()
             let elapsed = start.duration(to: clock.now)
             let ms = Double(elapsed.components.seconds) * 1_000
                 + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000

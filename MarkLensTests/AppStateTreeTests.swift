@@ -59,4 +59,30 @@ final class AppStateTreeTests: XCTestCase {
 
         XCTAssertEqual(nodes.map(\.name), ["Zeta.md", "Folder", "Alpha.md"])
     }
+
+    func testRefreshSnapshotReplacesOnlyChangedDirectorySubtree() async throws {
+        let docsURL = tempDirectoryURL.appendingPathComponent("Docs", isDirectory: true)
+        let notesURL = tempDirectoryURL.appendingPathComponent("Notes", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: docsURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true)
+        try "# one".write(to: docsURL.appendingPathComponent("One.md"), atomically: true, encoding: .utf8)
+        try "# two".write(to: notesURL.appendingPathComponent("Two.md"), atomically: true, encoding: .utf8)
+
+        let snapshot = await WorkspaceRefreshService.buildSnapshot(at: tempDirectoryURL, pinnedURLs: [])
+
+        try "# three".write(to: docsURL.appendingPathComponent("Three.md"), atomically: true, encoding: .utf8)
+
+        let refreshed = await WorkspaceRefreshService.refreshSnapshot(
+            from: snapshot,
+            changedDirectory: docsURL,
+            pinnedURLs: []
+        )
+
+        let docsNode = refreshed.nodes.first(where: { $0.url == docsURL })
+        let notesNode = refreshed.nodes.first(where: { $0.url == notesURL })
+
+        XCTAssertEqual(docsNode?.children?.map(\.name), ["One.md", "Three.md"])
+        XCTAssertEqual(notesNode?.children?.map(\.name), ["Two.md"])
+    }
 }

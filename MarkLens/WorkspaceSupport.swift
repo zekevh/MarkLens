@@ -63,9 +63,10 @@ final class FileWatcher {
 final class FolderWatcher {
     private var sources: [URL: DispatchSourceFileSystemObject] = [:]
     private var debounceWork: DispatchWorkItem?
-    private var handler: (() -> Void)?
+    private var pendingChangedDirectories: Set<URL> = []
+    private var handler: ((Set<URL>) -> Void)?
 
-    func watch(directories: [URL], onChange: @escaping () -> Void) {
+    func watch(directories: [URL], onChange: @escaping (Set<URL>) -> Void) {
         handler = onChange
         let newSet = Set(directories)
         let oldSet = Set(sources.keys)
@@ -82,7 +83,7 @@ final class FolderWatcher {
                 eventMask: [.write, .rename, .delete],
                 queue: .main
             )
-            src.setEventHandler { [weak self] in self?.schedule() }
+            src.setEventHandler { [weak self] in self?.schedule(changedDirectory: url) }
             src.setCancelHandler { close(fd) }
             src.resume()
             sources[url] = src
@@ -92,14 +93,21 @@ final class FolderWatcher {
     func stopAll() {
         debounceWork?.cancel()
         debounceWork = nil
+        pendingChangedDirectories = []
         sources.values.forEach { $0.cancel() }
         sources.removeAll()
         handler = nil
     }
 
-    private func schedule() {
+    private func schedule(changedDirectory: URL) {
+        pendingChangedDirectories.insert(changedDirectory)
         debounceWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.handler?() }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let changedDirectories = self.pendingChangedDirectories
+            self.pendingChangedDirectories = []
+            self.handler?(changedDirectories)
+        }
         debounceWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
@@ -202,11 +210,59 @@ struct ExternalEditConflict {
 // MARK: - WorkspaceTreeBuilder
 
 enum WorkspaceTreeBuilder {
+    private struct BuildResult {
+        let nodes: [FileNode]
+        let watchedDirectories: [URL]
+    }
+
     nonisolated static func buildTree(
         at url: URL,
         pinnedURLs: Set<String>,
         parentFilters: [GitignoreFilter] = []
     ) -> [FileNode] {
+        build(at: url, pinnedURLs: pinnedURLs, parentFilters: parentFilters).nodes
+    }
+
+    nonisolated static func buildSnapshot(
+        at url: URL,
+        pinnedURLs: Set<String>,
+        parentFilters: [GitignoreFilter] = []
+    ) -> WorkspaceSnapshot {
+        let result = build(at: url, pinnedURLs: pinnedURLs, parentFilters: parentFilters)
+        return WorkspaceSnapshot(
+            rootFolder: url,
+            nodes: result.nodes,
+            watchedDirectories: [url] + result.watchedDirectories
+        )
+    }
+
+    nonisolated static func collectDirectories(from nodes: [FileNode]) -> [URL] {
+        nodes.flatMap { node -> [URL] in
+            guard node.isDirectory else { return [] }
+            return [node.url] + collectDirectories(from: node.children ?? [])
+        }
+    }
+
+    nonisolated static func replacingSubtree(
+        in nodes: [FileNode],
+        directoryURL: URL,
+        replacementChildren: [FileNode]
+    ) -> [FileNode]? {
+        var replaced = false
+        let updatedNodes = replacingSubtree(
+            in: nodes,
+            directoryURL: directoryURL,
+            replacementChildren: replacementChildren,
+            replaced: &replaced
+        )
+        return replaced ? updatedNodes : nil
+    }
+
+    nonisolated private static func build(
+        at url: URL,
+        pinnedURLs: Set<String>,
+        parentFilters: [GitignoreFilter]
+    ) -> BuildResult {
         let fm = FileManager.default
         var filters = parentFilters
         if fm.fileExists(atPath: url.appendingPathComponent(".gitignore").path) {
@@ -216,19 +272,22 @@ enum WorkspaceTreeBuilder {
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey, .nameKey],
             options: [.skipsHiddenFiles]
-        ) else { return [] }
+        ) else { return BuildResult(nodes: [], watchedDirectories: []) }
 
-        return contents.compactMap { child -> FileNode? in
+        var watchedDirectories: [URL] = []
+        let nodes = contents.compactMap { child -> FileNode? in
             let isDir = (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             if filters.contains(where: { $0.isIgnored(child, isDirectory: isDir) }) { return nil }
             if isDir {
-                let children = buildTree(at: child, pinnedURLs: pinnedURLs, parentFilters: filters)
-                guard !children.isEmpty else { return nil }
+                let result = build(at: child, pinnedURLs: pinnedURLs, parentFilters: filters)
+                guard !result.nodes.isEmpty else { return nil }
+                watchedDirectories.append(child)
+                watchedDirectories.append(contentsOf: result.watchedDirectories)
                 return FileNode(
                     url: child,
                     name: child.lastPathComponent,
                     isDirectory: true,
-                    children: children
+                    children: result.nodes
                 )
             }
 
@@ -243,12 +302,39 @@ enum WorkspaceTreeBuilder {
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
+        return BuildResult(nodes: nodes, watchedDirectories: watchedDirectories)
     }
 
-    nonisolated static func collectDirectories(from nodes: [FileNode]) -> [URL] {
-        nodes.flatMap { node -> [URL] in
-            guard node.isDirectory else { return [] }
-            return [node.url] + collectDirectories(from: node.children ?? [])
+    nonisolated private static func replacingSubtree(
+        in nodes: [FileNode],
+        directoryURL: URL,
+        replacementChildren: [FileNode],
+        replaced: inout Bool
+    ) -> [FileNode] {
+        nodes.compactMap { node in
+            if node.url == directoryURL {
+                replaced = true
+                guard node.isDirectory, !replacementChildren.isEmpty else { return nil }
+                var updatedNode = node
+                updatedNode.children = replacementChildren
+                return updatedNode
+            }
+
+            guard node.isDirectory,
+                  directoryURL.path.hasPrefix(node.url.path + "/") else {
+                return node
+            }
+
+            let updatedChildren = replacingSubtree(
+                in: node.children ?? [],
+                directoryURL: directoryURL,
+                replacementChildren: replacementChildren,
+                replaced: &replaced
+            )
+            guard !updatedChildren.isEmpty else { return nil }
+            var updatedNode = node
+            updatedNode.children = updatedChildren
+            return updatedNode
         }
     }
 }
@@ -262,12 +348,37 @@ struct WorkspaceSnapshot {
 enum WorkspaceRefreshService {
     static func buildSnapshot(at folder: URL, pinnedURLs: Set<String>) async -> WorkspaceSnapshot {
         await Task.detached(priority: .utility) {
-            let nodes = WorkspaceTreeBuilder.buildTree(at: folder, pinnedURLs: pinnedURLs)
-            let watchedDirectories = [folder] + WorkspaceTreeBuilder.collectDirectories(from: nodes)
+            WorkspaceTreeBuilder.buildSnapshot(at: folder, pinnedURLs: pinnedURLs)
+        }.value
+    }
+
+    static func refreshSnapshot(
+        from snapshot: WorkspaceSnapshot,
+        changedDirectory: URL,
+        pinnedURLs: Set<String>
+    ) async -> WorkspaceSnapshot {
+        await Task.detached(priority: .utility) {
+            guard changedDirectory == snapshot.rootFolder || changedDirectory.path.hasPrefix(snapshot.rootFolder.path + "/") else {
+                return snapshot
+            }
+
+            if changedDirectory == snapshot.rootFolder {
+                return WorkspaceTreeBuilder.buildSnapshot(at: snapshot.rootFolder, pinnedURLs: pinnedURLs)
+            }
+
+            let replacementChildren = WorkspaceTreeBuilder.buildTree(at: changedDirectory, pinnedURLs: pinnedURLs)
+            guard let nodes = WorkspaceTreeBuilder.replacingSubtree(
+                in: snapshot.nodes,
+                directoryURL: changedDirectory,
+                replacementChildren: replacementChildren
+            ) else {
+                return WorkspaceTreeBuilder.buildSnapshot(at: snapshot.rootFolder, pinnedURLs: pinnedURLs)
+            }
+
             return WorkspaceSnapshot(
-                rootFolder: folder,
+                rootFolder: snapshot.rootFolder,
                 nodes: nodes,
-                watchedDirectories: watchedDirectories
+                watchedDirectories: [snapshot.rootFolder] + WorkspaceTreeBuilder.collectDirectories(from: nodes)
             )
         }.value
     }
@@ -276,7 +387,7 @@ enum WorkspaceRefreshService {
     static func applyWatch(
         _ snapshot: WorkspaceSnapshot,
         using watcher: FolderWatcher,
-        onChange: @escaping () -> Void
+        onChange: @escaping (Set<URL>) -> Void
     ) {
         watcher.watch(directories: snapshot.watchedDirectories, onChange: onChange)
     }
