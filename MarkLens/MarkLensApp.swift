@@ -14,80 +14,14 @@ enum UITestLaunchEnvironment {
 @MainActor
 final class AppState: ObservableObject {
     @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
-    @Published var searchText: String = "" {
-        didSet { syncSearchResults() }
-    }
-    @Published var isSearchFocused: Bool = false
-    @Published var replaceText: String = ""
-    @Published var isReplaceVisible: Bool = false
-    @Published var isPathBarVisible: Bool = true
-    @Published var isStatusBarVisible: Bool = true
-    @Published private(set) var searchMatchCount: Int = 0
 
     let documentStore = DocumentStore()
     let workspaceStore: WorkspaceStore
-    private let search = DocumentSearch()
-    private var cancellables: Set<AnyCancellable> = []
+    let editorUIStore: EditorUIStore
 
     init() {
         workspaceStore = WorkspaceStore(documentStore: documentStore)
-        documentStore.$documentText
-            .sink { [weak self] _ in
-                self?.syncSearchResults()
-            }
-            .store(in: &cancellables)
-    }
-
-    private var activeUndoManager: UndoManager? {
-        NSApp.keyWindow?.firstResponder?.undoManager ?? NSApp.keyWindow?.undoManager
-    }
-
-    func showFindBar(showReplace: Bool = false) {
-        guard documentStore.selectedFileURL != nil else { return }
-        if showReplace {
-            isReplaceVisible.toggle()
-            if !isReplaceVisible {
-                replaceText = ""
-            }
-        }
-        isSearchFocused = true
-    }
-
-    func hideReplaceBar() {
-        replaceText = ""
-        isReplaceVisible = false
-    }
-
-    func replaceNext() {
-        let originalText = documentStore.documentText
-        guard let updatedText = search.replaceNext(in: originalText, with: replaceText) else { return }
-        applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace")
-    }
-
-    func replaceAll() {
-        let originalText = documentStore.documentText
-        guard let updatedText = search.replaceAll(in: originalText, with: replaceText) else { return }
-        applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace All")
-    }
-
-    private func applyReplaceResult(_ updatedText: String, originalText: String, actionName: String) {
-        guard updatedText != originalText else { return }
-
-        let undoManager = activeUndoManager
-        undoManager?.registerUndo(withTarget: self) { state in
-            MainActor.assumeIsolated {
-                state.applyReplaceResult(originalText, originalText: updatedText, actionName: actionName)
-            }
-        }
-        undoManager?.setActionName(actionName)
-
-        documentStore.documentText = updatedText
-        documentStore.saveCurrentFile(text: updatedText)
-    }
-
-    private func syncSearchResults() {
-        search.update(documentText: documentStore.documentText, query: searchText)
-        searchMatchCount = search.matchCount
+        editorUIStore = EditorUIStore(documentStore: documentStore)
     }
 
     func restoreLastSession() {
@@ -189,21 +123,21 @@ private struct AppCommands: Commands {
             .keyboardShortcut("f", modifiers: [.command, .control])
         }
         CommandGroup(after: .textEditing) {
-            Button("Find…") { activeState?.showFindBar() }
+            Button("Find…") { activeState?.editorUIStore.showFindBar() }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(activeState?.documentStore.selectedFileURL == nil)
-            Button("Replace…") { activeState?.showFindBar(showReplace: true) }
+            Button("Replace…") { activeState?.editorUIStore.showFindBar(showReplace: true) }
                 .keyboardShortcut("f", modifiers: [.command, .option])
                 .disabled(activeState?.documentStore.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {
-            Button((activeState?.isPathBarVisible ?? true) ? "Hide Path Bar" : "Show Path Bar") {
-                activeState?.isPathBarVisible.toggle()
+            Button((activeState?.editorUIStore.isPathBarVisible ?? true) ? "Hide Path Bar" : "Show Path Bar") {
+                activeState?.editorUIStore.isPathBarVisible.toggle()
             }
             .keyboardShortcut("p", modifiers: [.command, .option])
 
-            Button((activeState?.isStatusBarVisible ?? true) ? "Hide Status Bar" : "Show Status Bar") {
-                activeState?.isStatusBarVisible.toggle()
+            Button((activeState?.editorUIStore.isStatusBarVisible ?? true) ? "Hide Status Bar" : "Show Status Bar") {
+                activeState?.editorUIStore.isStatusBarVisible.toggle()
             }
             .keyboardShortcut("'", modifiers: .command)
 
@@ -233,6 +167,7 @@ private struct WindowView: View {
         ContentView()
             .environmentObject(appState)
             .environmentObject(appState.documentStore)
+            .environmentObject(appState.editorUIStore)
             .environmentObject(appState.workspaceStore)
             .focusedObject(appState)
             .background(WindowAccessor { window in
