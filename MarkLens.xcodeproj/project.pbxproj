@@ -36,8 +36,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		1D4D389EBB6A410A974F6A62 /* MarkLensUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkLensUITests.swift; sourceTree = "<group>"; };
 		19FCBF882F72D7B1004D4F68 /* MarkLens.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarkLens.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1D4D389EBB6A410A974F6A62 /* MarkLensUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkLensUITests.swift; sourceTree = "<group>"; };
 		4D4C48D18A104999A1C6B620 /* MarkdownEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownEngineTests.swift; sourceTree = "<group>"; };
 		75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTreeTests.swift; sourceTree = "<group>"; };
 		8C1CA348E29E412A890E8C56 /* AppStateFileOperationsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateFileOperationsTests.swift; sourceTree = "<group>"; };
@@ -49,7 +49,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		E1A7D220C5F64C42923F7BE1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		E1A7D220C5F64C42923F7BE1 /* Exceptions for "MarkLens" folder in "MarkLens" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -62,7 +62,7 @@
 		19FCBF8A2F72D7B2004D4F68 /* MarkLens */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				E1A7D220C5F64C42923F7BE1 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+				E1A7D220C5F64C42923F7BE1 /* Exceptions for "MarkLens" folder in "MarkLens" target */,
 			);
 			path = MarkLens;
 			sourceTree = "<group>";

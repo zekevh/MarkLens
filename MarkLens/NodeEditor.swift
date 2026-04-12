@@ -98,6 +98,24 @@ final class BlocksManager: ObservableObject {
         blocks = parsed.isEmpty ? [MarkdownBlock(content: "")] : parsed
     }
 
+    func syncBlockKinds(from previous: [MarkdownBlock]) {
+        guard !blocks.isEmpty else { return }
+
+        let idsAreStable =
+            previous.count == blocks.count &&
+            zip(previous, blocks).allSatisfy { $0.id == $1.id }
+
+        guard idsAreStable else {
+            reclassifyBlocks(at: Array(blocks.indices))
+            return
+        }
+
+        let dirtyIndexes = previous.indices.filter { index in
+            previous[index].content != blocks[index].content || previous[index].kind != blocks[index].kind
+        }
+        reclassifyBlocks(at: dirtyIndexes)
+    }
+
     /// Clears all cross-block selection state and wipes crossBlockSelectionRange
     /// from every registered NSTextView so highlights don't linger.
     func clearCrossBlockSelection() {
@@ -105,6 +123,18 @@ final class BlocksManager: ObservableObject {
         crossCursorID = nil
         for (_, tv) in registry.allRegistered() {
             (tv as? BlockNSTextView)?.crossBlockSelectionRange = nil
+        }
+    }
+
+    private func reclassifyBlocks(at indexes: [Int]) {
+        for index in Set(indexes).sorted() where blocks.indices.contains(index) {
+            let classified = MarkdownEngine.classifyBlockSource(
+                blocks[index].content,
+                isFirstBlock: index == 0
+            )
+            if blocks[index].kind != classified {
+                blocks[index].kind = classified
+            }
         }
     }
 
@@ -601,17 +631,9 @@ struct NodeEditorView: View {
         .onChange(of: undoManager) { _, um in
             manager.undoManager = um
         }
-        .onChange(of: manager.blocks) { _, newBlocks in
-            for index in manager.blocks.indices {
-                let classified = MarkdownEngine.classifyBlockSource(
-                    manager.blocks[index].content,
-                    isFirstBlock: index == 0
-                )
-                if manager.blocks[index].kind != classified {
-                    manager.blocks[index].kind = classified
-                }
-            }
-            let serialized = serializeMarkdownBlocks(newBlocks)
+        .onChange(of: manager.blocks) { oldBlocks, _ in
+            manager.syncBlockKinds(from: oldBlocks)
+            let serialized = serializeMarkdownBlocks(manager.blocks)
             guard serialized != text else { return }
             // Keep documentText in sync so reloadIfChangedOnDisk can correctly
             // detect whether there are real unsaved edits vs. a clean state.
