@@ -37,7 +37,7 @@ Or [download the DMG](https://github.com/zekevh/MarkLens/releases/latest).
 - File watching — detects external changes and prompts to resolve conflicts
 - Raw mode (⌘⇧R) — toggle to plain text anytime
 - Autosave — no Cmd+S needed
-- Native Swift, zero dependencies, no Electron
+- Native Swift app, no Electron
 
 ## Build
 
@@ -80,6 +80,30 @@ xcodebuild -project MarkLens.xcodeproj -scheme MarkLens -destination 'platform=m
 
 The UI tests use a test harness that launches the app against a temporary writable workspace, so they can cover create, rename, and conflict-resolution flows reliably.
 
+## Benchmarks
+
+Run the benchmark suite:
+
+```sh
+./scripts/run-benchmarks.sh
+```
+
+This runs focused performance tests for:
+
+- workspace tree building
+- large-document search
+- incremental block kind sync after a single edit
+- markdown block serialization
+
+Current synthetic benchmark sizes:
+
+- workspace tree build: `120` directories, `24` markdown files per directory (`2,880` markdown files total)
+- document search: `4,000` mixed markdown blocks
+- incremental block sync: `3,000` mixed markdown blocks with one edited block
+- serialization: `3,000` mixed markdown blocks
+
+The benchmark runner writes local logs to `.benchmarks/`, which is gitignored. These benchmarks are intended for before/after comparison while refactoring, not as profiler-grade absolute measurements.
+
 ## Development
 
 Targets:
@@ -101,6 +125,7 @@ Useful files:
 - `MarkLens/ContentView.swift`: main UI, sidebar, raw editor, and UI-test hooks
 - `MarkLens/MarkdownEngine.swift`: markdown parsing and block classification
 - `MarkLens/NodeEditor.swift`: block editor behavior
+- `MarkLensTests/PerformanceBenchmarksTests.swift`: synthetic performance benchmarks for core editing and workspace flows
 - `MarkLensTests/*.swift`: focused unit coverage by subsystem
 - `MarkLensUITests/MarkLensUITests.swift`: end-to-end coverage for launch and file workflows
 

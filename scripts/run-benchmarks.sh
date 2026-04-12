@@ -26,9 +26,16 @@ else
 
   echo "Running benchmarks..."
   echo "Log: ${log_path}"
+  echo "This can take a few seconds..."
   (
     cd "${ROOT_DIR}"
-    "${cmd[@]}" 2>&1 | tee "${log_path}"
+    if ! "${cmd[@]}" > "${log_path}" 2>&1; then
+      echo
+      echo "Benchmark run failed. Recent log output:"
+      echo
+      tail -n 80 "${log_path}"
+      exit 1
+    fi
   )
 fi
 

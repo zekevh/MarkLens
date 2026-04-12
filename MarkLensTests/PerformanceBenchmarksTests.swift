@@ -55,6 +55,20 @@ final class PerformanceBenchmarksTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testBlocksEditorSyncBenchmark_singleBlockEdit() {
+        let manager = BlocksManager()
+        manager.load(from: makeLargeDocument(blockCount: 3_000, lineLength: 72))
+
+        let oldBlocks = manager.blocks
+        manager.blocks[1_500].content = "# Reclassified heading"
+
+        benchmark(name: "blocks_editor_sync_single_block_edit") {
+            let serialized = manager.synchronizeDocument(from: oldBlocks)
+            XCTAssertFalse(serialized.isEmpty)
+        }
+    }
+
     func testSerializeMarkdownBlocksBenchmark_largeDocument() {
         let blocks = parseMarkdownBlocks(makeLargeDocument(blockCount: 3_000, lineLength: 72))
 

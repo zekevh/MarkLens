@@ -92,10 +92,12 @@ final class BlocksManager: ObservableObject {
 
     // Injected from SwiftUI environment — same instance NSTextView uses for within-block undo.
     var undoManager: UndoManager?
+    private var documentBuffer = BlockDocumentBuffer()
 
     func load(from text: String) {
         let parsed = parseMarkdownBlocks(text)
         blocks = parsed.isEmpty ? [MarkdownBlock(content: "")] : parsed
+        _ = documentBuffer.load(blocks: blocks)
     }
 
     func syncBlockKinds(from previous: [MarkdownBlock]) {
@@ -114,6 +116,11 @@ final class BlocksManager: ObservableObject {
             previous[index].content != blocks[index].content || previous[index].kind != blocks[index].kind
         }
         reclassifyBlocks(at: dirtyIndexes)
+    }
+
+    func synchronizeDocument(from previous: [MarkdownBlock]) -> String {
+        syncBlockKinds(from: previous)
+        return documentBuffer.sync(from: previous, to: blocks)
     }
 
     /// Clears all cross-block selection state and wipes crossBlockSelectionRange
@@ -632,8 +639,7 @@ struct NodeEditorView: View {
             manager.undoManager = um
         }
         .onChange(of: manager.blocks) { oldBlocks, _ in
-            manager.syncBlockKinds(from: oldBlocks)
-            let serialized = serializeMarkdownBlocks(manager.blocks)
+            let serialized = manager.synchronizeDocument(from: oldBlocks)
             guard serialized != text else { return }
             // Keep documentText in sync so reloadIfChangedOnDisk can correctly
             // detect whether there are real unsaved edits vs. a clean state.

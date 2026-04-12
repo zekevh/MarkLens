@@ -58,4 +58,29 @@ final class BlocksManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.blocks.map(\.content), ["Two", "Three", "One"])
     }
+
+    func testSynchronizeDocumentMatchesFullSerializationForSingleBlockEdit() {
+        let manager = BlocksManager()
+        let source = "# Title\n\nParagraph\n\n- Item"
+        manager.load(from: source)
+
+        let previous = manager.blocks
+        manager.blocks[1].content = "Updated paragraph"
+
+        let synchronized = manager.synchronizeDocument(from: previous)
+
+        XCTAssertEqual(synchronized, serializeMarkdownBlocks(manager.blocks))
+    }
+
+    func testSynchronizeDocumentRebuildsAfterStructuralChange() {
+        let manager = BlocksManager()
+        manager.load(from: "One\n\nTwo")
+
+        let previous = manager.blocks
+        manager.blocks.append(MarkdownBlock(content: "Three"))
+
+        let synchronized = manager.synchronizeDocument(from: previous)
+
+        XCTAssertEqual(synchronized, "One\n\nTwo\n\nThree")
+    }
 }
