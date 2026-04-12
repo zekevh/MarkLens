@@ -36,7 +36,7 @@ final class AppStateTreeTests: XCTestCase {
         try "# doc".write(to: docsURL.appendingPathComponent("Guide.markdown"), atomically: true, encoding: .utf8)
         try "# hidden".write(to: ignoredURL.appendingPathComponent("Skip.md"), atomically: true, encoding: .utf8)
 
-        let nodes = appState.buildTree(at: tempDirectoryURL)
+        let nodes = appState.workspaceStore.buildTree(at: tempDirectoryURL)
 
         XCTAssertEqual(nodes.map(\.name), ["Docs", "README.md"])
         XCTAssertEqual(nodes.first?.children?.map(\.name), ["Guide.markdown"])
@@ -53,9 +53,9 @@ final class AppStateTreeTests: XCTestCase {
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         try "# child".write(to: folderURL.appendingPathComponent("Child.md"), atomically: true, encoding: .utf8)
 
-        appState.pinnedURLs = [zetaURL.absoluteString]
+        appState.workspaceStore.pinnedURLs = [zetaURL.absoluteString]
 
-        let nodes = appState.buildTree(at: tempDirectoryURL)
+        let nodes = appState.workspaceStore.buildTree(at: tempDirectoryURL)
 
         XCTAssertEqual(nodes.map(\.name), ["Zeta.md", "Folder", "Alpha.md"])
     }

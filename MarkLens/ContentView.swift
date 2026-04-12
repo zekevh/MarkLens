@@ -5,6 +5,8 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var documentStore: DocumentStore
+    @EnvironmentObject var workspaceStore: WorkspaceStore
     @FocusState private var isSearchFocused: Bool
     private let environment = ProcessInfo.processInfo.environment
     private var isUITestHarnessEnabled: Bool {
@@ -16,23 +18,23 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 320)
         } detail: {
             Group {
-                if appState.selectedFileURL != nil {
-                    if appState.isRawMode {
+                if documentStore.selectedFileURL != nil {
+                    if documentStore.isRawMode {
                         RawTextEditorView(
-                            text: $appState.documentText,
-                            onTextChange: { appState.saveCurrentFile(text: $0) }
+                            text: $documentStore.documentText,
+                            onTextChange: { documentStore.saveCurrentFile(text: $0) }
                         )
-                        .id(appState.selectedFileURL)
+                        .id(documentStore.selectedFileURL)
                         .ignoresSafeArea(.container, edges: .bottom)
                     } else {
                         NodeEditorView(
-                            text: $appState.documentText,
+                            text: $documentStore.documentText,
                             searchText: appState.searchText,
-                            fileURL: appState.selectedFileURL,
-                            onTextChange: { appState.saveCurrentFile(text: $0) },
-                            onLinkClick: { appState.handleLinkClick($0) }
+                            fileURL: documentStore.selectedFileURL,
+                            onTextChange: { documentStore.saveCurrentFile(text: $0) },
+                            onLinkClick: { documentStore.handleLinkClick($0) }
                         )
-                        .id(appState.selectedFileURL)
+                        .id(documentStore.selectedFileURL)
                         .ignoresSafeArea(.container, edges: .bottom)
                     }
                 } else {
@@ -41,7 +43,7 @@ struct ContentView: View {
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                if appState.selectedFileURL != nil, appState.isReplaceVisible {
+                if documentStore.selectedFileURL != nil, appState.isReplaceVisible {
                     ReplaceBar(
                         searchText: appState.searchText,
                         replaceText: $appState.replaceText,
@@ -53,12 +55,12 @@ struct ContentView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let selectedFileURL = appState.selectedFileURL,
+                if let selectedFileURL = documentStore.selectedFileURL,
                    appState.isPathBarVisible || appState.isStatusBarVisible {
                     EditorStatusBar(
                         fileURL: selectedFileURL,
-                        rootFolderURL: appState.rootFolderURL,
-                        text: appState.documentText,
+                        rootFolderURL: workspaceStore.rootFolderURL,
+                        text: documentStore.documentText,
                         showsPathBar: appState.isPathBarVisible,
                         showsStatusBar: appState.isStatusBarVisible
                     )
@@ -68,16 +70,16 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button(action: { appState.createFile() }) {
+                Button(action: { workspaceStore.createFile() }) {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
                 .accessibilityIdentifier("newNoteButton")
                 .help("New Note (⌘N)")
-                .disabled(appState.rootNodes.isEmpty)
+                .disabled(workspaceStore.rootNodes.isEmpty)
             }
 
             ToolbarItem(placement: .primaryAction) {
-                if let url = appState.selectedFileURL {
+                if let url = documentStore.selectedFileURL {
                     ShareLink(item: url) {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
@@ -88,51 +90,51 @@ struct ContentView: View {
             if isUITestHarnessEnabled {
                 ToolbarItemGroup(placement: .automatic) {
                     Button("Create Harness Note") {
-                        appState.createFile(named: "Harness Note")
+                        workspaceStore.createFile(named: "Harness Note")
                     }
                     .accessibilityIdentifier("uiTestCreateButton")
 
                     Button("Rename Selected") {
-                        guard let selectedURL = appState.selectedFileURL else { return }
+                        guard let selectedURL = documentStore.selectedFileURL else { return }
                         let ext = selectedURL.pathExtension
-                        appState.renameFile(selectedURL, to: "Renamed Alpha.\(ext)")
+                        workspaceStore.renameFile(selectedURL, to: "Renamed Alpha.\(ext)")
                     }
                     .accessibilityIdentifier("uiTestRenameButton")
-                    .disabled(appState.selectedFileURL == nil)
+                    .disabled(documentStore.selectedFileURL == nil)
 
                     Button("Inject Conflict") {
-                        appState.simulateExternalConflict(
+                        documentStore.simulateExternalConflict(
                             unsavedText: "Local unsaved edit",
                             diskText: "Disk version from test"
                         )
                     }
                     .accessibilityIdentifier("uiTestConflictButton")
-                    .disabled(appState.selectedFileURL == nil)
+                    .disabled(documentStore.selectedFileURL == nil)
                 }
             }
         }
         .toolbarBackground(.hidden, for: .windowToolbar)
         .alert("Error", isPresented: Binding(
-            get: { appState.errorMessage != nil },
-            set: { if !$0 { appState.errorMessage = nil } }
+            get: { documentStore.errorMessage != nil },
+            set: { if !$0 { documentStore.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { appState.errorMessage = nil }
+            Button("OK", role: .cancel) { documentStore.errorMessage = nil }
         } message: {
-            Text(appState.errorMessage ?? "")
+            Text(documentStore.errorMessage ?? "")
         }
         .alert(
             "File Changed on Disk",
             isPresented: Binding(
-                get: { appState.externalEditConflict != nil },
-                set: { if !$0 { appState.resolveConflict(keepMine: true) } }
+                get: { documentStore.externalEditConflict != nil },
+                set: { if !$0 { documentStore.resolveConflict(keepMine: true) } }
             )
         ) {
-            Button("Keep My Changes", role: .cancel) { appState.resolveConflict(keepMine: true) }
-            Button("Use Disk Version", role: .destructive) { appState.resolveConflict(keepMine: false) }
+            Button("Keep My Changes", role: .cancel) { documentStore.resolveConflict(keepMine: true) }
+            Button("Use Disk Version", role: .destructive) { documentStore.resolveConflict(keepMine: false) }
         } message: {
-            Text("\"\(appState.externalEditConflict?.fileName ?? "")\" was modified by another app while you had unsaved changes.")
+            Text("\"\(documentStore.externalEditConflict?.fileName ?? "")\" was modified by another app while you had unsaved changes.")
         }
-        .if(appState.selectedFileURL != nil) { view in
+        .if(documentStore.selectedFileURL != nil) { view in
             view
                 .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
                 .searchFocused($isSearchFocused)
@@ -276,14 +278,15 @@ private struct ReplaceBar: View {
 // MARK: - SidebarView
 
 struct SidebarView: View {
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var documentStore: DocumentStore
+    @EnvironmentObject var workspaceStore: WorkspaceStore
     @State private var renamingURL: URL? = nil
     @State private var renameText: String = ""
 
     var body: some View {
         Group {
-            if appState.rootNodes.isEmpty {
-                if appState.recentURLs.isEmpty {
+            if workspaceStore.rootNodes.isEmpty {
+                if documentStore.recentURLs.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "folder.badge.plus")
                             .font(.system(size: 32))
@@ -291,7 +294,7 @@ struct SidebarView: View {
                         Text("Open a folder or file")
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                        Button("Open Folder…") { appState.openFolderPanel() }
+                        Button("Open Folder…") { workspaceStore.openFolderPanel() }
                             .buttonStyle(.borderless)
                             .foregroundStyle(Color.accentColor)
                     }
@@ -301,21 +304,21 @@ struct SidebarView: View {
                 }
             } else {
                 List(selection: Binding(
-                    get: { appState.selectedSidebarURLs },
+                    get: { workspaceStore.selectedSidebarURLs },
                     set: { urls in
-                        appState.updateSidebarSelection(urls)
+                        workspaceStore.updateSidebarSelection(urls)
                     }
                 )) {
-                    if !appState.pinnedFileNodes.isEmpty {
+                    if !workspaceStore.pinnedFileNodes.isEmpty {
                         Section("Pinned") {
-                            ForEach(appState.pinnedFileNodes) { node in
+                            ForEach(workspaceStore.pinnedFileNodes) { node in
                                 sidebarNodeRow(node)
                             }
                         }
                     }
 
                     Section("Files") {
-                        OutlineGroup(appState.rootNodes, children: \.optionalChildren) { node in
+                        OutlineGroup(workspaceStore.rootNodes, children: \.optionalChildren) { node in
                             sidebarNodeRow(node)
                         }
                     }
@@ -334,7 +337,7 @@ struct SidebarView: View {
                     let ext = url.pathExtension
                     let newName = renameText.trimmingCharacters(in: .whitespaces)
                     let finalName = newName.lowercased().hasSuffix(".\(ext)") ? newName : "\(newName).\(ext)"
-                    appState.renameFile(url, to: finalName)
+                    workspaceStore.renameFile(url, to: finalName)
                 }
                 renamingURL = nil
             }
@@ -350,8 +353,8 @@ struct SidebarView: View {
             .draggable(node.url.path) {
                 SidebarDragPreview(
                     node: node,
-                    selectedCount: appState.selectedSidebarURLs.contains(node.url)
-                        ? appState.selectedSidebarURLs.count
+                    selectedCount: workspaceStore.selectedSidebarURLs.contains(node.url)
+                        ? workspaceStore.selectedSidebarURLs.count
                         : 1
                 )
             }
@@ -360,7 +363,7 @@ struct SidebarView: View {
                       !items.isEmpty
                 else { return false }
                 let sourceURLs = items.map { URL(fileURLWithPath: $0) }
-                appState.moveNodes(sourceURLs, into: node.url)
+                workspaceStore.moveNodes(sourceURLs, into: node.url)
                 return true
             }
             .contextMenu {
@@ -374,10 +377,10 @@ struct SidebarView: View {
 
                     Divider()
 
-                    Button { appState.togglePin(node.url) } label: {
+                    Button { workspaceStore.togglePin(node.url) } label: {
                         Label(
-                            appState.isPinned(node.url) ? "Unpin" : "Pin",
-                            systemImage: appState.isPinned(node.url) ? "pin.slash" : "pin"
+                            workspaceStore.isPinned(node.url) ? "Unpin" : "Pin",
+                            systemImage: workspaceStore.isPinned(node.url) ? "pin.slash" : "pin"
                         )
                     }
 
@@ -390,7 +393,7 @@ struct SidebarView: View {
                     Divider()
 
                     Button(role: .destructive) {
-                        appState.deleteFile(node.url)
+                        workspaceStore.deleteFile(node.url)
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
@@ -399,7 +402,7 @@ struct SidebarView: View {
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !node.isDirectory {
                     Button(role: .destructive) {
-                        appState.deleteFile(node.url)
+                        workspaceStore.deleteFile(node.url)
                     } label: {
                         Image(systemName: "trash")
                     }
@@ -411,8 +414,8 @@ struct SidebarView: View {
             }
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 if !node.isDirectory {
-                    Button { appState.togglePin(node.url) } label: {
-                        Image(systemName: appState.isPinned(node.url) ? "pin.slash" : "pin")
+                    Button { workspaceStore.togglePin(node.url) } label: {
+                        Image(systemName: workspaceStore.isPinned(node.url) ? "pin.slash" : "pin")
                     }
                     .tint(.orange)
                 }
@@ -423,12 +426,13 @@ struct SidebarView: View {
 // MARK: - RecentFilesView
 
 struct RecentFilesView: View {
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var documentStore: DocumentStore
+    @EnvironmentObject var workspaceStore: WorkspaceStore
 
     var body: some View {
-        List(appState.recentURLs, id: \.path, selection: Binding(
-            get: { appState.selectedFileURL },
-            set: { url in if let url { appState.openRecent(url) } }
+        List(documentStore.recentURLs, id: \.path, selection: Binding(
+            get: { documentStore.selectedFileURL },
+            set: { url in if let url { documentStore.openRecent(url) } }
         )) { url in
             VStack(alignment: .leading, spacing: 2) {
                 Text(url.lastPathComponent)
@@ -447,9 +451,9 @@ struct RecentFilesView: View {
             VStack(spacing: 0) {
                 Divider()
                 HStack {
-                    Button("Open Folder…") { appState.openFolderPanel() }
+                    Button("Open Folder…") { workspaceStore.openFolderPanel() }
                     Spacer()
-                    Button("Clear") { appState.clearRecents() }
+                    Button("Clear") { documentStore.clearRecents() }
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
@@ -466,14 +470,14 @@ struct RecentFilesView: View {
 // MARK: - SidebarRow
 
 struct SidebarRow: View {
-    @EnvironmentObject var appState: AppState
+    @EnvironmentObject var workspaceStore: WorkspaceStore
     let node: FileNode
 
     var body: some View {
         Label {
             HStack(spacing: 4) {
                 Text(node.name).lineLimit(1).truncationMode(.middle)
-                if !node.isDirectory && appState.isPinned(node.url) {
+                if !node.isDirectory && workspaceStore.isPinned(node.url) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)

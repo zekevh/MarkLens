@@ -1,6 +1,5 @@
 import SwiftUI
 import Combine
-import UniformTypeIdentifiers
 import AppKit
 
 enum UITestLaunchEnvironment {
@@ -14,14 +13,6 @@ enum UITestLaunchEnvironment {
 
 @MainActor
 final class AppState: ObservableObject {
-    @Published var rootNodes: [FileNode] = []
-    @Published var selectedFileURL: URL? = nil
-    @Published var selectedSidebarURLs: Set<URL> = []
-    @Published var documentText: String = "" {
-        didSet { syncSearchResults() }
-    }
-    @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
-    @Published var recentURLs: [URL] = []
     @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
     @Published var searchText: String = "" {
         didSet { syncSearchResults() }
@@ -29,30 +20,30 @@ final class AppState: ObservableObject {
     @Published var isSearchFocused: Bool = false
     @Published var replaceText: String = ""
     @Published var isReplaceVisible: Bool = false
-    @Published var errorMessage: String? = nil
-    @Published var externalEditConflict: ExternalEditConflict? = nil
-    @Published var isRawMode: Bool = false
     @Published var isPathBarVisible: Bool = true
     @Published var isStatusBarVisible: Bool = true
     @Published private(set) var searchMatchCount: Int = 0
 
-    private var saveWorkItem: DispatchWorkItem?
-    private var lastSavedText: String? = nil
-    private var recentBookmarks: [String: Data] = [:]   // url.path → security-scoped bookmark
-    private let fileWatcher = FileWatcher()
-    let folderWatcher = FolderWatcher()
+    let documentStore = DocumentStore()
+    let workspaceStore: WorkspaceStore
     private let search = DocumentSearch()
-    private var treeRebuildGeneration = 0
-    private var workspaceSnapshot: WorkspaceSnapshot?
+    private var cancellables: Set<AnyCancellable> = []
 
-    var rootFolderURL: URL?
+    init() {
+        workspaceStore = WorkspaceStore(documentStore: documentStore)
+        documentStore.$documentText
+            .sink { [weak self] _ in
+                self?.syncSearchResults()
+            }
+            .store(in: &cancellables)
+    }
 
     private var activeUndoManager: UndoManager? {
         NSApp.keyWindow?.firstResponder?.undoManager ?? NSApp.keyWindow?.undoManager
     }
 
     func showFindBar(showReplace: Bool = false) {
-        guard selectedFileURL != nil else { return }
+        guard documentStore.selectedFileURL != nil else { return }
         if showReplace {
             isReplaceVisible.toggle()
             if !isReplaceVisible {
@@ -68,13 +59,13 @@ final class AppState: ObservableObject {
     }
 
     func replaceNext() {
-        let originalText = documentText
+        let originalText = documentStore.documentText
         guard let updatedText = search.replaceNext(in: originalText, with: replaceText) else { return }
         applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace")
     }
 
     func replaceAll() {
-        let originalText = documentText
+        let originalText = documentStore.documentText
         guard let updatedText = search.replaceAll(in: originalText, with: replaceText) else { return }
         applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace All")
     }
@@ -90,654 +81,21 @@ final class AppState: ObservableObject {
         }
         undoManager?.setActionName(actionName)
 
-        documentText = updatedText
-        saveCurrentFile(text: updatedText)
+        documentStore.documentText = updatedText
+        documentStore.saveCurrentFile(text: updatedText)
     }
 
-    // MARK: Tree helpers
-
     private func syncSearchResults() {
-        search.update(documentText: documentText, query: searchText)
+        search.update(documentText: documentStore.documentText, query: searchText)
         searchMatchCount = search.matchCount
     }
 
-    /// Rebuild rootNodes from disk without blocking the main actor.
-    private func rebuildTree(onComplete: (@MainActor ([FileNode]) -> Void)? = nil) {
-        guard let folder = rootFolderURL else { return }
-
-        treeRebuildGeneration += 1
-        let generation = treeRebuildGeneration
-        let pinnedURLs = pinnedURLs
-
-        Task { @MainActor [weak self] in
-            let snapshot = await WorkspaceRefreshService.buildSnapshot(at: folder, pinnedURLs: pinnedURLs)
-            guard let self else { return }
-            guard self.treeRebuildGeneration == generation, self.rootFolderURL == snapshot.rootFolder else { return }
-            self.workspaceSnapshot = snapshot
-            self.rootNodes = snapshot.nodes
-            self.applyFolderWatch(snapshot)
-            onComplete?(snapshot.nodes)
-        }
-    }
-
-    /// Update directory watches to match every directory currently in the tree.
-    private func applyFolderWatch(_ snapshot: WorkspaceSnapshot) {
-        WorkspaceRefreshService.applyWatch(snapshot, using: folderWatcher) { [weak self] changedDirectories in
-            self?.refreshWorkspace(changedDirectories: changedDirectories)
-        }
-    }
-
-    private func refreshWorkspace(changedDirectories: Set<URL>) {
-        guard let snapshot = workspaceSnapshot, let rootFolderURL else {
-            rebuildTree()
-            return
-        }
-
-        guard changedDirectories.count == 1, let changedDirectory = changedDirectories.first else {
-            rebuildTree()
-            return
-        }
-
-        treeRebuildGeneration += 1
-        let generation = treeRebuildGeneration
-        let pinnedURLs = pinnedURLs
-
-        Task { @MainActor [weak self] in
-            let refreshedSnapshot = await WorkspaceRefreshService.refreshSnapshot(
-                from: snapshot,
-                changedDirectory: changedDirectory,
-                pinnedURLs: pinnedURLs
-            )
-            guard let self else { return }
-            guard self.treeRebuildGeneration == generation, self.rootFolderURL == rootFolderURL else { return }
-            self.workspaceSnapshot = refreshedSnapshot
-            self.rootNodes = refreshedSnapshot.nodes
-            self.applyFolderWatch(refreshedSnapshot)
-        }
-    }
-
-    // MARK: File loading
-
-    func loadFile(_ url: URL, syncSidebarSelection: Bool = true) {
-        guard !url.hasDirectoryPath else { return }
-        do {
-            documentText = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            errorMessage = "Could not open \"\(url.lastPathComponent)\": \(error.localizedDescription)"
-            return
-        }
-        lastSavedText = documentText
-        selectedFileURL = url
-        if syncSidebarSelection {
-            selectedSidebarURLs = [url]
-        }
-        fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
-        recordRecent(url)
-    }
-
-    func updateSidebarSelection(_ newSelection: Set<URL>) {
-        let previousSelection = selectedSidebarURLs
-        selectedSidebarURLs = newSelection
-
-        guard let candidate = preferredSidebarFileSelection(
-            oldSelection: previousSelection,
-            newSelection: newSelection
-        ) else { return }
-
-        if selectedFileURL != candidate {
-            loadFile(candidate, syncSidebarSelection: false)
-        }
-    }
-
-    private func preferredSidebarFileSelection(oldSelection: Set<URL>, newSelection: Set<URL>) -> URL? {
-        if let current = selectedFileURL,
-           newSelection.contains(current),
-           !current.hasDirectoryPath {
-            return current
-        }
-
-        let orderedURLs = visibleSidebarURLs(from: rootNodes)
-        let addedURLs = newSelection.subtracting(oldSelection)
-        let candidateSet = addedURLs.isEmpty ? newSelection : addedURLs
-
-        return orderedURLs.last(where: { candidateSet.contains($0) && !$0.hasDirectoryPath })
-    }
-
-    private func visibleSidebarURLs(from nodes: [FileNode]) -> [URL] {
-        nodes.flatMap { node in
-            [node.url] + visibleSidebarURLs(from: node.children ?? [])
-        }
-    }
-
-    var pinnedFileNodes: [FileNode] {
-        pinnedFileNodes(from: rootNodes)
-    }
-
-    private func pinnedFileNodes(from nodes: [FileNode]) -> [FileNode] {
-        nodes.flatMap { node in
-            if node.isDirectory {
-                return pinnedFileNodes(from: node.children ?? [])
-            }
-
-            return isPinned(node.url) ? [node] : []
-        }
-    }
-
-    /// Handles a link click from the node editor. External URLs (http/https/mailto) are
-    /// opened in the default browser; everything else is treated as a path relative to
-    /// the currently open file and navigated to inside the editor.
-    func handleLinkClick(_ urlString: String) {
-        // Try as a full URL with a recognised scheme first.
-        if let url = URL(string: urlString),
-           let scheme = url.scheme?.lowercased(),
-           ["http", "https", "mailto", "ftp"].contains(scheme) {
-            NSWorkspace.shared.open(url)
-            return
-        }
-        // Internal link — resolve relative to the directory of the open file.
-        guard let base = selectedFileURL?.deletingLastPathComponent() else { return }
-        // Strip any fragment (#heading) and query string before resolving.
-        let pathPart = urlString.components(separatedBy: CharacterSet(charactersIn: "#?")).first ?? urlString
-        guard !pathPart.isEmpty else { return }
-        let resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: base).standardized
-        guard FileManager.default.fileExists(atPath: resolvedURL.path) else { return }
-        loadFile(resolvedURL)
-    }
-
-    func clearRecents() {
-        recentURLs = []
-        recentBookmarks = [:]
-        UserDefaults.standard.removeObject(forKey: "recentURLPaths")
-        UserDefaults.standard.removeObject(forKey: "recentBookmarks")
-        NSDocumentController.shared.clearRecentDocuments(nil)
-    }
-
-    private func recordRecent(_ url: URL) {
-        var list = recentURLs
-        list.removeAll { $0.path == url.path }
-        list.insert(url, at: 0)
-        recentURLs = Array(list.prefix(10))
-
-        if let bookmark = try? url.bookmarkData(options: .withSecurityScope,
-                                                includingResourceValuesForKeys: nil,
-                                                relativeTo: nil) {
-            recentBookmarks[url.path] = bookmark
-            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
-        }
-        UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
-        NSDocumentController.shared.noteNewRecentDocumentURL(url)
-    }
-
-    func openRecent(_ url: URL) {
-        guard let bookmarkData = recentBookmarks[url.path] else {
-            // No bookmark — file was recorded before sandbox was enabled; ask user to reopen manually
-            errorMessage = "Cannot access \"\(url.lastPathComponent)\" — please open it via File > Open."
-            recentURLs.removeAll { $0.path == url.path }
-            recentBookmarks.removeValue(forKey: url.path)
-            UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
-            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
-            return
-        }
-        var isStale = false
-        do {
-            let scopedURL = try URL(resolvingBookmarkData: bookmarkData,
-                                    options: .withSecurityScope,
-                                    relativeTo: nil,
-                                    bookmarkDataIsStale: &isStale)
-            guard scopedURL.startAccessingSecurityScopedResource() else {
-                throw CocoaError(.fileReadNoPermission)
-            }
-            if isStale, let refreshed = try? scopedURL.bookmarkData(options: .withSecurityScope,
-                                                                    includingResourceValuesForKeys: nil,
-                                                                    relativeTo: nil) {
-                recentBookmarks[url.path] = refreshed
-                UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
-            }
-            loadFile(scopedURL)
-        } catch {
-            errorMessage = "Cannot access \"\(url.lastPathComponent)\": \(error.localizedDescription)"
-        }
-    }
-
-    private func reloadIfChangedOnDisk() {
-        guard let url = selectedFileURL else { return }
-        guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
-        guard onDisk != documentText else { return }
-        // Disk matches what we last wrote — our own save fired the watcher; user may have
-        // typed more since. Either way, nothing to do.
-        guard onDisk != lastSavedText else { return }
-
-        if documentText == lastSavedText {
-            // Disk changed, no unsaved edits — silently reload
-            documentText = onDisk
-            lastSavedText = onDisk
-        } else {
-            // Disk changed AND user has unsaved edits — surface the conflict
-            externalEditConflict = ExternalEditConflict(
-                diskContent: onDisk,
-                fileName: url.lastPathComponent
-            )
-        }
-    }
-
-    func resolveConflict(keepMine: Bool) {
-        guard let conflict = externalEditConflict else { return }
-        externalEditConflict = nil
-        if !keepMine {
-            documentText = conflict.diskContent
-            lastSavedText = conflict.diskContent
-        }
-    }
-
-    func createFile(named fileName: String, contents: String = "") {
-        let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return }
-        let normalizedName = trimmedName.lowercased().hasSuffix(".md") ? trimmedName : "\(trimmedName).md"
-        let baseURL = rootFolderURL ?? selectedFileURL?.deletingLastPathComponent()
-        guard let dir = baseURL else { return }
-
-        let url = dir.appendingPathComponent(normalizedName)
-        guard !FileManager.default.fileExists(atPath: url.path) else {
-            errorMessage = "\"\(url.lastPathComponent)\" already exists."
-            return
-        }
-
-        do {
-            try contents.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            present(error, context: "Could not create \"\(url.lastPathComponent)\"")
-            return
-        }
-
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        }
-        loadFile(url)
-    }
-
-    func simulateExternalConflict(unsavedText: String, diskText: String) {
-        guard let url = selectedFileURL else { return }
-        documentText = unsavedText
-        do {
-            try diskText.write(to: url, atomically: true, encoding: .utf8)
-        } catch {
-            present(error, context: "Could not simulate external edit for \"\(url.lastPathComponent)\"")
-            return
-        }
-        externalEditConflict = ExternalEditConflict(
-            diskContent: diskText,
-            fileName: url.lastPathComponent
-        )
-    }
-
-    private func present(_ error: Error, context: String) {
-        errorMessage = "\(context): \(error.localizedDescription)"
-    }
-
     func restoreLastSession() {
-        recentBookmarks = (UserDefaults.standard.dictionary(forKey: "recentBookmarks") as? [String: Data]) ?? [:]
-        let storedPaths = UserDefaults.standard.stringArray(forKey: "recentURLPaths") ?? []
-        // Keep only paths that have a bookmark (sandbox can't verify existence without access)
-        recentURLs = storedPaths
-            .filter { recentBookmarks[$0] != nil }
-            .map { URL(fileURLWithPath: $0) }
-
-        // Restore last opened folder
-        if let bookmarkData = UserDefaults.standard.data(forKey: "rootFolderBookmark") {
-            var isStale = false
-            if let scopedURL = try? URL(resolvingBookmarkData: bookmarkData,
-                                        options: .withSecurityScope,
-                                        relativeTo: nil,
-                                        bookmarkDataIsStale: &isStale),
-               scopedURL.startAccessingSecurityScopedResource() {
-            if isStale {
-                saveFolderBookmark(scopedURL)
-            }
-            rootFolderURL = scopedURL
-            rebuildTree()
-            }
-        }
-    }
-
-    func saveCurrentFile(text: String) {
-        guard let url = selectedFileURL else { return }
-        guard FileManager.default.isWritableFile(atPath: url.path) else {
-            errorMessage = "Cannot save \"\(url.lastPathComponent)\": file is read-only."
-            return
-        }
-        saveWorkItem?.cancel()
-        lastSavedText = text   // mark now so our own write doesn't trigger a conflict
-        let item = DispatchWorkItem { [weak self] in
-            do {
-                try text.write(to: url, atomically: true, encoding: .utf8)
-            } catch {
-                DispatchQueue.main.async {
-                    self?.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
-                }
-            }
-            DispatchQueue.main.async { self?.saveWorkItem = nil }
-        }
-        saveWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+        workspaceStore.restoreLastSession()
     }
 
     func flushPendingSave() {
-        saveWorkItem?.perform()
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-    }
-
-    // MARK: Close folder / workspace
-
-    func closeFolder() {
-        saveWorkItem?.perform()
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-        fileWatcher.stop()
-        folderWatcher.stopAll()
-        treeRebuildGeneration += 1
-        rootFolderURL = nil
-        workspaceSnapshot = nil
-        saveFolderBookmark(nil)
-        rootNodes = []
-        selectedFileURL = nil
-        selectedSidebarURLs = []
-        documentText = ""
-    }
-
-    // MARK: New file
-
-    func createFile() {
-        let baseURL = rootFolderURL ?? selectedFileURL?.deletingLastPathComponent()
-        guard let dir = baseURL else { return }
-
-        var url = dir.appendingPathComponent("Untitled.md")
-        var counter = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-            url = dir.appendingPathComponent("Untitled \(counter).md")
-            counter += 1
-        }
-        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-            errorMessage = "Could not create \"\(url.lastPathComponent)\". Check folder permissions."
-            return
-        }
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        }
-        loadFile(url)
-    }
-
-    // MARK: Open panels
-
-    func openFolderPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Open Folder"
-        panel.begin { [weak self] response in
-            guard let self, response == .OK, let url = panel.url else { return }
-            self.setRootFolder(url)
-        }
-    }
-
-    func openFilePanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [
-            UTType(filenameExtension: "md") ?? .plainText,
-            UTType(filenameExtension: "markdown") ?? .plainText
-        ]
-        panel.prompt = "Open"
-        panel.begin { [weak self] response in
-            guard let self, response == .OK, let url = panel.url else { return }
-            self.rootFolderURL = nil
-            self.workspaceSnapshot = nil
-            self.saveFolderBookmark(nil)
-            self.folderWatcher.stopAll()
-            self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-            self.loadFile(url)
-        }
-    }
-
-    /// Sets the root folder, saves a security-scoped bookmark, rebuilds the tree.
-    func setRootFolder(_ url: URL) {
-        rootFolderURL = url
-        saveFolderBookmark(url)
-        rebuildTree { [weak self] nodes in
-            guard let self, let first = self.firstFile(in: nodes) else { return }
-            self.loadFile(first.url)
-        }
-    }
-
-    private func saveFolderBookmark(_ url: URL?) {
-        guard let url else {
-            UserDefaults.standard.removeObject(forKey: "rootFolderBookmark")
-            UserDefaults.standard.removeObject(forKey: "rootFolderPath")
-            return
-        }
-        if let bookmark = try? url.bookmarkData(options: .withSecurityScope,
-                                                includingResourceValuesForKeys: nil,
-                                                relativeTo: nil) {
-            UserDefaults.standard.set(bookmark, forKey: "rootFolderBookmark")
-            UserDefaults.standard.set(url.path, forKey: "rootFolderPath")
-        }
-    }
-
-    // MARK: Tree building
-
-    func buildTree(at url: URL, parentFilters: [GitignoreFilter] = []) -> [FileNode] {
-        WorkspaceTreeBuilder.buildTree(at: url, pinnedURLs: pinnedURLs, parentFilters: parentFilters)
-    }
-
-    // MARK: Pin / Delete
-
-    func isPinned(_ url: URL) -> Bool {
-        pinnedURLs.contains(url.absoluteString)
-    }
-
-    func togglePin(_ url: URL) {
-        let key = url.absoluteString
-        if pinnedURLs.contains(key) { pinnedURLs.remove(key) } else { pinnedURLs.insert(key) }
-        UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
-        rebuildTree()
-    }
-
-    func deleteFile(_ url: URL) {
-        do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        } catch {
-            present(error, context: "Could not move \"\(url.lastPathComponent)\" to Trash")
-            return
-        }
-        selectedSidebarURLs.remove(url)
-        if selectedFileURL == url { selectedFileURL = nil; documentText = "" }
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = rootNodes.filter { $0.url != url }
-        }
-    }
-
-    func renameFile(_ url: URL, to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        let newURL = url.deletingLastPathComponent().appendingPathComponent(trimmed)
-        guard newURL.path != url.path else { return }
-        do {
-            try FileManager.default.moveItem(at: url, to: newURL)
-        } catch {
-            present(error, context: "Could not rename \"\(url.lastPathComponent)\"")
-            return
-        }
-        if pinnedURLs.contains(url.absoluteString) {
-            pinnedURLs.remove(url.absoluteString)
-            pinnedURLs.insert(newURL.absoluteString)
-            UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
-        }
-        // Replace old URL in recents with new URL
-        if recentURLs.contains(where: { $0.path == url.path }) {
-            recentURLs.removeAll { $0.path == url.path }
-            recentBookmarks.removeValue(forKey: url.path)
-            recordRecent(newURL)
-        }
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = rootNodes.map { node in
-                node.url == url
-                    ? FileNode(url: newURL, name: newURL.lastPathComponent, isDirectory: false)
-                    : node
-            }
-        }
-        if selectedSidebarURLs.contains(url) {
-            selectedSidebarURLs.remove(url)
-            selectedSidebarURLs.insert(newURL)
-        }
-        if selectedFileURL == url { loadFile(newURL) }
-    }
-
-    func moveNode(_ sourceURL: URL, into destinationFolderURL: URL) {
-        moveNodes([sourceURL], into: destinationFolderURL)
-    }
-
-    func moveNodes(_ sourceURLs: [URL], into destinationFolderURL: URL) {
-        guard destinationFolderURL.hasDirectoryPath else { return }
-
-        let uniqueSourceURLs = Array(Set(sourceURLs)).sorted { $0.path < $1.path }
-        guard !uniqueSourceURLs.isEmpty else { return }
-
-        let filteredSourceURLs = uniqueSourceURLs.filter { sourceURL in
-            let standardizedSourcePath = sourceURL.standardizedFileURL.path
-            return !uniqueSourceURLs.contains(where: {
-                $0 != sourceURL &&
-                standardizedSourcePath.hasPrefix($0.standardizedFileURL.path + "/")
-            })
-        }
-        guard !filteredSourceURLs.isEmpty else { return }
-
-        for sourceURL in filteredSourceURLs {
-            guard sourceURL != destinationFolderURL else { continue }
-            guard sourceURL.deletingLastPathComponent() != destinationFolderURL else { continue }
-
-            let sourcePath = sourceURL.standardizedFileURL.path
-            let destinationPath = destinationFolderURL.standardizedFileURL.path
-            if destinationPath.hasPrefix(sourcePath + "/") {
-                errorMessage = "Cannot move a folder into one of its own subfolders."
-                return
-            }
-
-            let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
-            guard !FileManager.default.fileExists(atPath: targetURL.path) else {
-                errorMessage = "\"\(targetURL.lastPathComponent)\" already exists in \"\(destinationFolderURL.lastPathComponent)\"."
-                return
-            }
-        }
-
-        var movedSelections: Set<URL> = []
-        var reloadedURL: URL? = nil
-        var updatedPinned = pinnedURLs
-
-        for sourceURL in filteredSourceURLs {
-            let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
-
-            do {
-                try FileManager.default.moveItem(at: sourceURL, to: targetURL)
-            } catch {
-                present(error, context: "Could not move \"\(sourceURL.lastPathComponent)\"")
-                return
-            }
-
-            if updatedPinned.contains(sourceURL.absoluteString) {
-                updatedPinned.remove(sourceURL.absoluteString)
-                updatedPinned.insert(targetURL.absoluteString)
-            }
-
-            if recentURLs.contains(where: { $0.path == sourceURL.path }) {
-                recentURLs.removeAll { $0.path == sourceURL.path }
-                recentBookmarks.removeValue(forKey: sourceURL.path)
-                recordRecent(targetURL)
-            }
-
-            if selectedSidebarURLs.contains(sourceURL) {
-                movedSelections.insert(targetURL)
-            }
-
-            if selectedFileURL == sourceURL {
-                reloadedURL = targetURL
-            }
-        }
-
-        pinnedURLs = updatedPinned
-        UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
-
-        selectedSidebarURLs.subtract(filteredSourceURLs)
-        selectedSidebarURLs.formUnion(movedSelections)
-
-        if rootFolderURL != nil {
-            rebuildTree()
-        }
-
-        if let reloadedURL {
-            loadFile(reloadedURL, syncSidebarSelection: false)
-        }
-    }
-
-    private func firstFile(in nodes: [FileNode]) -> FileNode? {
-        for node in nodes {
-            if !node.isDirectory { return node }
-            if let child = firstFile(in: node.children ?? []) { return child }
-        }
-        return nil
-    }
-
-    // MARK: External file open (Finder double-click / drag)
-
-    /// Opens a file received from outside the app (Finder, CLI, drag). Walks up the
-    /// directory tree to find the nearest git root and uses that as the sidebar root
-    /// so the project tree is visible. Falls back to a single-file view if the git
-    /// root is inaccessible (sandbox) or absent.
-    func openExternalFile(_ url: URL) {
-        guard !url.hasDirectoryPath else { return }
-        if let gitRoot = findGitRoot(for: url) {
-            rootFolderURL = gitRoot
-            rebuildTree { [weak self] nodes in
-                guard let self else { return }
-                // rebuildTree may come back empty if the sandbox blocks the directory;
-                // fall through to single-file mode in that case.
-                if !nodes.isEmpty {
-                    self.loadFile(url)
-                    return
-                }
-                self.folderWatcher.stopAll()
-                self.rootFolderURL = nil
-                self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-                self.loadFile(url)
-            }
-            return
-        }
-        // No git root found (or sandbox blocked it) — show just the single file.
-        folderWatcher.stopAll()
-        rootFolderURL = nil
-        rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        loadFile(url)
-    }
-
-    private func findGitRoot(for url: URL) -> URL? {
-        var dir = url.deletingLastPathComponent()
-        while dir.pathComponents.count > 1 {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git").path) {
-                return dir
-            }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        documentStore.flushPendingSave()
     }
 }
 
@@ -791,7 +149,7 @@ private struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New File") { activeState?.createFile() }
+            Button("New File") { activeState?.workspaceStore.createFile() }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(activeState == nil)
             Button("New Window") { openWindow(id: "main") }
@@ -810,14 +168,14 @@ private struct AppCommands: Commands {
         }
         CommandGroup(after: .newItem) {
             Divider()
-            Button("Open File…") { activeState?.openFilePanel() }
+            Button("Open File…") { activeState?.workspaceStore.openFilePanel() }
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Open Folder…") { activeState?.openFolderPanel() }
+            Button("Open Folder…") { activeState?.workspaceStore.openFolderPanel() }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             Divider()
-            Button("Close Folder") { activeState?.closeFolder() }
+            Button("Close Folder") { activeState?.workspaceStore.closeFolder() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
-                .disabled(activeState?.rootNodes.isEmpty ?? true)
+                .disabled(activeState?.workspaceStore.rootNodes.isEmpty ?? true)
         }
         CommandGroup(replacing: .toolbar) {
             Button((activeState?.sidebarVisibility ?? .all) == .all ? "Hide Sidebar" : "Show Sidebar") {
@@ -833,10 +191,10 @@ private struct AppCommands: Commands {
         CommandGroup(after: .textEditing) {
             Button("Find…") { activeState?.showFindBar() }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(activeState?.selectedFileURL == nil)
+                .disabled(activeState?.documentStore.selectedFileURL == nil)
             Button("Replace…") { activeState?.showFindBar(showReplace: true) }
                 .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(activeState?.selectedFileURL == nil)
+                .disabled(activeState?.documentStore.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {
             Button((activeState?.isPathBarVisible ?? true) ? "Hide Path Bar" : "Show Path Bar") {
@@ -851,11 +209,12 @@ private struct AppCommands: Commands {
 
             Divider()
 
-            Button((activeState?.isRawMode ?? false) ? "Show Rendered Markdown" : "Show Raw Markdown") {
-                activeState?.isRawMode.toggle()
+            Button((activeState?.documentStore.isRawMode ?? false) ? "Show Rendered Markdown" : "Show Raw Markdown") {
+                guard let state = activeState else { return }
+                state.documentStore.isRawMode.toggle()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(activeState?.selectedFileURL == nil)
+            .disabled(activeState?.documentStore.selectedFileURL == nil)
         }
     }
 }
@@ -873,6 +232,8 @@ private struct WindowView: View {
     var body: some View {
         ContentView()
             .environmentObject(appState)
+            .environmentObject(appState.documentStore)
+            .environmentObject(appState.workspaceStore)
             .focusedObject(appState)
             .background(WindowAccessor { window in
                 appDelegate.register(window: window, state: appState)
@@ -885,10 +246,10 @@ private struct WindowView: View {
                 if let rootFolderPath = environment[UITestLaunchEnvironment.rootFolder], !rootFolderPath.isEmpty {
                     let sourceURL = URL(fileURLWithPath: rootFolderPath, isDirectory: true)
                     let url = uiTestWorkspaceURL(for: sourceURL) ?? sourceURL
-                    appState.setRootFolder(url)
+                    appState.workspaceStore.setRootFolder(url)
                 }
                 if environment[UITestLaunchEnvironment.rawMode] == "1" {
-                    appState.isRawMode = true
+                    appState.documentStore.isRawMode = true
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .marklensOpenNewWindow)) { _ in
@@ -935,7 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowStates[NSValue(nonretainedObject: window)] = state
         if let url = pendingFileURL {
             pendingFileURL = nil
-            state.openExternalFile(url)
+            state.workspaceStore.openExternalFile(url)
         }
     }
 
@@ -955,7 +316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startMCPServer() {
         let server = MCPServer(
             openFile: { @MainActor [weak self] url in
-                self?.keyAppState?.openExternalFile(url)
+                self?.keyAppState?.workspaceStore.openExternalFile(url)
                 NSApp.activate(ignoringOtherApps: true)
             },
             newWindow: { @MainActor [weak self] url in
@@ -986,7 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !url.hasDirectoryPath,
               FileManager.default.fileExists(atPath: url.path) else { return }
         if let state = keyAppState ?? windowStates.values.first {
-            state.openExternalFile(url)
+            state.workspaceStore.openExternalFile(url)
         } else {
             // No window registered yet (app just launched via Finder double-click).
             // Store and apply once the first window comes up.

@@ -15,8 +15,8 @@ final class AppStateSearchReplaceTests: XCTestCase {
         try "".write(to: fileURL, atomically: true, encoding: .utf8)
 
         appState = AppState()
-        appState.selectedFileURL = fileURL
-        appState.errorMessage = nil
+        appState.documentStore.selectedFileURL = fileURL
+        appState.documentStore.errorMessage = nil
     }
 
     override func tearDownWithError() throws {
@@ -27,33 +27,33 @@ final class AppStateSearchReplaceTests: XCTestCase {
     }
 
     func testSearchMatchCountCountsAllCaseInsensitiveOccurrences() {
-        appState.documentText = "Alpha beta ALPHA gamma alpha"
+        appState.documentStore.documentText = "Alpha beta ALPHA gamma alpha"
         appState.searchText = "alpha"
 
         XCTAssertEqual(appState.searchMatchCount, 3)
     }
 
     func testReplaceNextReplacesOnlyFirstMatch() throws {
-        appState.documentText = "Alpha beta alpha"
+        appState.documentStore.documentText = "Alpha beta alpha"
         appState.searchText = "alpha"
         appState.replaceText = "note"
 
         appState.replaceNext()
         appState.flushPendingSave()
 
-        XCTAssertEqual(appState.documentText, "note beta alpha")
+        XCTAssertEqual(appState.documentStore.documentText, "note beta alpha")
         XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "note beta alpha")
     }
 
     func testReplaceAllReplacesEveryMatchAndPersistsToDisk() throws {
-        appState.documentText = "Alpha beta ALPHA gamma alpha"
+        appState.documentStore.documentText = "Alpha beta ALPHA gamma alpha"
         appState.searchText = "alpha"
         appState.replaceText = "note"
 
         appState.replaceAll()
         appState.flushPendingSave()
 
-        XCTAssertEqual(appState.documentText, "note beta note gamma note")
+        XCTAssertEqual(appState.documentStore.documentText, "note beta note gamma note")
         XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "note beta note gamma note")
     }
 }
