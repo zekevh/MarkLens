@@ -66,6 +66,14 @@ Run the full test suite, including unit tests and UI tests:
 xcodebuild -project MarkLens.xcodeproj -scheme MarkLens -destination 'platform=macOS' test
 ```
 
+Or use the compact test runner:
+
+```sh
+./scripts/run-test.sh MarkLensTests
+./scripts/run-test.sh MarkLensUITests
+./scripts/run-test.sh MarkLensTests/AppStateTreeTests
+```
+
 Run only the unit tests:
 
 ```sh
@@ -79,6 +87,8 @@ xcodebuild -project MarkLens.xcodeproj -scheme MarkLens -destination 'platform=m
 ```
 
 The UI tests use a test harness that launches the app against a temporary writable workspace, so they can cover create, rename, and conflict-resolution flows reliably.
+
+The compact runner writes full logs to `.test-logs/` and prints only a short test summary unless the run fails.
 
 ## Benchmarks
 

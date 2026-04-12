@@ -108,25 +108,21 @@ final class AppState: ObservableObject {
         let generation = treeRebuildGeneration
         let pinnedURLs = pinnedURLs
 
-        let task = Task.detached(priority: .utility) { [folder, generation, pinnedURLs] in
-            let nodes = WorkspaceTreeBuilder.buildTree(at: folder, pinnedURLs: pinnedURLs)
-            let dirs = [folder] + WorkspaceTreeBuilder.collectDirectories(from: nodes)
-            return (nodes, dirs, folder, generation)
-        }
-
         Task { @MainActor [weak self] in
-            let (nodes, dirs, folder, generation) = await task.value
+            let snapshot = await WorkspaceRefreshService.buildSnapshot(at: folder, pinnedURLs: pinnedURLs)
             guard let self else { return }
-            guard self.treeRebuildGeneration == generation, self.rootFolderURL == folder else { return }
-            self.rootNodes = nodes
-            self.applyFolderWatch(directories: dirs)
-            onComplete?(nodes)
+            guard self.treeRebuildGeneration == generation, self.rootFolderURL == snapshot.rootFolder else { return }
+            self.rootNodes = snapshot.nodes
+            self.applyFolderWatch(snapshot)
+            onComplete?(snapshot.nodes)
         }
     }
 
     /// Update directory watches to match every directory currently in the tree.
-    private func applyFolderWatch(directories: [URL]) {
-        folderWatcher.watch(directories: directories) { [weak self] in self?.rebuildTree() }
+    private func applyFolderWatch(_ snapshot: WorkspaceSnapshot) {
+        WorkspaceRefreshService.applyWatch(snapshot, using: folderWatcher) { [weak self] in
+            self?.rebuildTree()
+        }
     }
 
     // MARK: File loading

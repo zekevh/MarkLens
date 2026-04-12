@@ -252,3 +252,32 @@ enum WorkspaceTreeBuilder {
         }
     }
 }
+
+struct WorkspaceSnapshot {
+    let rootFolder: URL
+    let nodes: [FileNode]
+    let watchedDirectories: [URL]
+}
+
+enum WorkspaceRefreshService {
+    static func buildSnapshot(at folder: URL, pinnedURLs: Set<String>) async -> WorkspaceSnapshot {
+        await Task.detached(priority: .utility) {
+            let nodes = WorkspaceTreeBuilder.buildTree(at: folder, pinnedURLs: pinnedURLs)
+            let watchedDirectories = [folder] + WorkspaceTreeBuilder.collectDirectories(from: nodes)
+            return WorkspaceSnapshot(
+                rootFolder: folder,
+                nodes: nodes,
+                watchedDirectories: watchedDirectories
+            )
+        }.value
+    }
+
+    @MainActor
+    static func applyWatch(
+        _ snapshot: WorkspaceSnapshot,
+        using watcher: FolderWatcher,
+        onChange: @escaping () -> Void
+    ) {
+        watcher.watch(directories: snapshot.watchedDirectories, onChange: onChange)
+    }
+}
