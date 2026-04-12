@@ -404,6 +404,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    var pinnedFileNodes: [FileNode] {
+        pinnedFileNodes(from: rootNodes)
+    }
+
+    private func pinnedFileNodes(from nodes: [FileNode]) -> [FileNode] {
+        nodes.flatMap { node in
+            if node.isDirectory {
+                return pinnedFileNodes(from: node.children ?? [])
+            }
+
+            return isPinned(node.url) ? [node] : []
+        }
+    }
+
     /// Handles a link click from the node editor. External URLs (http/https/mailto) are
     /// opened in the default browser; everything else is treated as a path relative to
     /// the currently open file and navigated to inside the editor.
@@ -738,10 +752,6 @@ final class AppState: ObservableObject {
             return FileNode(url: child, name: child.lastPathComponent, isDirectory: false)
         }
         .sorted {
-            // Pinned files float to the top, then folders, then alphabetical
-            let lPin = pinnedURLs.contains($0.url.absoluteString)
-            let rPin = pinnedURLs.contains($1.url.absoluteString)
-            if lPin != rPin { return lPin }
             if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }

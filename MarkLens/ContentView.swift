@@ -300,86 +300,25 @@ struct SidebarView: View {
                     RecentFilesView()
                 }
             } else {
-                List(appState.rootNodes, children: \.optionalChildren,
-                     selection: Binding(
-                        get: { appState.selectedSidebarURLs },
-                        set: { urls in
-                            appState.updateSidebarSelection(urls)
-                        }
-                     )
-                ) { node in
-                    SidebarRow(node: node)
-                        .tag(node.url)
-                        .draggable(node.url.path) {
-                            SidebarDragPreview(
-                                node: node,
-                                selectedCount: appState.selectedSidebarURLs.contains(node.url)
-                                    ? appState.selectedSidebarURLs.count
-                                    : 1
-                            )
-                        }
-                        .dropDestination(for: String.self) { items, _ in
-                            guard node.isDirectory,
-                                  !items.isEmpty
-                            else { return false }
-                            let sourceURLs = items.map { URL(fileURLWithPath: $0) }
-                            appState.moveNodes(sourceURLs, into: node.url)
-                            return true
-                        }
-                        .contextMenu {
-                            if !node.isDirectory {
-                                Button {
-                                    renameText = node.url.deletingPathExtension().lastPathComponent
-                                    renamingURL = node.url
-                                } label: {
-                                    Label("Rename File", systemImage: "pencil")
-                                }
-
-                                Divider()
-
-                                Button { appState.togglePin(node.url) } label: {
-                                    Label(
-                                        appState.isPinned(node.url) ? "Unpin" : "Pin",
-                                        systemImage: appState.isPinned(node.url) ? "pin.slash" : "pin"
-                                    )
-                                }
-
-                                Divider()
-
-                                ShareLink(item: node.url) {
-                                    Label("Share", systemImage: "square.and.arrow.up")
-                                }
-
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    appState.deleteFile(node.url)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                List(selection: Binding(
+                    get: { appState.selectedSidebarURLs },
+                    set: { urls in
+                        appState.updateSidebarSelection(urls)
+                    }
+                )) {
+                    if !appState.pinnedFileNodes.isEmpty {
+                        Section("Pinned") {
+                            ForEach(appState.pinnedFileNodes) { node in
+                                sidebarNodeRow(node)
                             }
                         }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if !node.isDirectory {
-                                Button(role: .destructive) {
-                                    appState.deleteFile(node.url)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                ShareLink(item: node.url) {
-                                    Image(systemName: "square.and.arrow.up")
-                                }
-                                .tint(.blue)
-                            }
+                    }
+
+                    Section("Files") {
+                        OutlineGroup(appState.rootNodes, children: \.optionalChildren) { node in
+                            sidebarNodeRow(node)
                         }
-                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                            if !node.isDirectory {
-                                Button { appState.togglePin(node.url) } label: {
-                                    Image(systemName: appState.isPinned(node.url) ? "pin.slash" : "pin")
-                                }
-                                .tint(.orange)
-                            }
-                        }
+                    }
                 }
                 .listStyle(.sidebar)
                 .accessibilityIdentifier("sidebarList")
@@ -402,6 +341,82 @@ struct SidebarView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { renamingURL = nil }
         }
+    }
+
+    @ViewBuilder
+    private func sidebarNodeRow(_ node: FileNode) -> some View {
+        SidebarRow(node: node)
+            .tag(node.url)
+            .draggable(node.url.path) {
+                SidebarDragPreview(
+                    node: node,
+                    selectedCount: appState.selectedSidebarURLs.contains(node.url)
+                        ? appState.selectedSidebarURLs.count
+                        : 1
+                )
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard node.isDirectory,
+                      !items.isEmpty
+                else { return false }
+                let sourceURLs = items.map { URL(fileURLWithPath: $0) }
+                appState.moveNodes(sourceURLs, into: node.url)
+                return true
+            }
+            .contextMenu {
+                if !node.isDirectory {
+                    Button {
+                        renameText = node.url.deletingPathExtension().lastPathComponent
+                        renamingURL = node.url
+                    } label: {
+                        Label("Rename File", systemImage: "pencil")
+                    }
+
+                    Divider()
+
+                    Button { appState.togglePin(node.url) } label: {
+                        Label(
+                            appState.isPinned(node.url) ? "Unpin" : "Pin",
+                            systemImage: appState.isPinned(node.url) ? "pin.slash" : "pin"
+                        )
+                    }
+
+                    Divider()
+
+                    ShareLink(item: node.url) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        appState.deleteFile(node.url)
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if !node.isDirectory {
+                    Button(role: .destructive) {
+                        appState.deleteFile(node.url)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    ShareLink(item: node.url) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .tint(.blue)
+                }
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if !node.isDirectory {
+                    Button { appState.togglePin(node.url) } label: {
+                        Image(systemName: appState.isPinned(node.url) ? "pin.slash" : "pin")
+                    }
+                    .tint(.orange)
+                }
+            }
     }
 }
 
