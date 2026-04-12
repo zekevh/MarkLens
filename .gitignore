@@ -24,5 +24,8 @@ build/
 # Local benchmark artifacts
 .benchmarks/
 
+# Local build runner artifacts
+.build-logs/
+
 # Local test runner artifacts
 .test-logs/
