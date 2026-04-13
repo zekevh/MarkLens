@@ -6,18 +6,24 @@ import Combine
 final class WorkspaceStore: ObservableObject {
     @Published var rootNodes: [FileNode] = []
     @Published var selectedSidebarURLs: Set<URL> = []
-    @Published var pinnedURLs: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinnedURLs") ?? [])
+    @Published var pinnedURLs: Set<String>
 
     let folderWatcher = FolderWatcher()
 
     private let documentStore: DocumentStore
+    private let persistence: WorkspacePersistence
     private var treeRebuildGeneration = 0
     private var workspaceSnapshot: WorkspaceSnapshot?
 
     var rootFolderURL: URL?
 
-    init(documentStore: DocumentStore) {
+    init(
+        documentStore: DocumentStore,
+        persistence: WorkspacePersistence = WorkspacePersistence()
+    ) {
         self.documentStore = documentStore
+        self.persistence = persistence
+        self.pinnedURLs = persistence.loadPinnedURLs()
     }
 
     func rebuildTree(onComplete: (@MainActor ([FileNode]) -> Void)? = nil) {
@@ -93,22 +99,9 @@ final class WorkspaceStore: ObservableObject {
 
     func restoreLastSession() {
         documentStore.restoreRecents()
-
-        guard let bookmarkData = UserDefaults.standard.data(forKey: "rootFolderBookmark") else { return }
-
-        var isStale = false
-        if let scopedURL = try? URL(
-            resolvingBookmarkData: bookmarkData,
-            options: .withSecurityScope,
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ), scopedURL.startAccessingSecurityScopedResource() {
-            if isStale {
-                saveFolderBookmark(scopedURL)
-            }
-            rootFolderURL = scopedURL
-            rebuildTree()
-        }
+        guard let scopedURL = persistence.restoreRootFolderURL() else { return }
+        rootFolderURL = scopedURL
+        rebuildTree()
     }
 
     func closeFolder() {
@@ -117,7 +110,7 @@ final class WorkspaceStore: ObservableObject {
         treeRebuildGeneration += 1
         rootFolderURL = nil
         workspaceSnapshot = nil
-        saveFolderBookmark(nil)
+        persistence.saveRootFolderURL(nil)
         rootNodes = []
         selectedSidebarURLs = []
     }
@@ -170,7 +163,7 @@ final class WorkspaceStore: ObservableObject {
             guard let self, response == .OK, let url = panel.url else { return }
             self.rootFolderURL = nil
             self.workspaceSnapshot = nil
-            self.saveFolderBookmark(nil)
+            self.persistence.saveRootFolderURL(nil)
             self.folderWatcher.stopAll()
             self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
             self.documentStore.loadFile(url)
@@ -179,7 +172,7 @@ final class WorkspaceStore: ObservableObject {
 
     func setRootFolder(_ url: URL) {
         rootFolderURL = url
-        saveFolderBookmark(url)
+        persistence.saveRootFolderURL(url)
         rebuildTree { [weak self] nodes in
             guard let self, let first = self.firstFile(in: nodes) else { return }
             self.loadFile(first.url)
@@ -201,7 +194,7 @@ final class WorkspaceStore: ObservableObject {
         } else {
             pinnedURLs.insert(key)
         }
-        UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
+        persistence.savePinnedURLs(pinnedURLs)
         rebuildTree()
     }
 
@@ -235,7 +228,7 @@ final class WorkspaceStore: ObservableObject {
         if pinnedURLs.contains(url.absoluteString) {
             pinnedURLs.remove(url.absoluteString)
             pinnedURLs.insert(newURL.absoluteString)
-            UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
+            persistence.savePinnedURLs(pinnedURLs)
         }
         if documentStore.hasRecent(url) {
             documentStore.removeRecent(url)
@@ -330,7 +323,7 @@ final class WorkspaceStore: ObservableObject {
         }
 
         pinnedURLs = updatedPinned
-        UserDefaults.standard.set(Array(pinnedURLs), forKey: "pinnedURLs")
+        persistence.savePinnedURLs(pinnedURLs)
 
         selectedSidebarURLs.subtract(filteredSourceURLs)
         selectedSidebarURLs.formUnion(movedSelections)
@@ -429,22 +422,6 @@ final class WorkspaceStore: ObservableObject {
             }
 
             return isPinned(node.url) ? [node] : []
-        }
-    }
-
-    private func saveFolderBookmark(_ url: URL?) {
-        guard let url else {
-            UserDefaults.standard.removeObject(forKey: "rootFolderBookmark")
-            UserDefaults.standard.removeObject(forKey: "rootFolderPath")
-            return
-        }
-        if let bookmark = try? url.bookmarkData(
-            options: .withSecurityScope,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        ) {
-            UserDefaults.standard.set(bookmark, forKey: "rootFolderBookmark")
-            UserDefaults.standard.set(url.path, forKey: "rootFolderPath")
         }
     }
 

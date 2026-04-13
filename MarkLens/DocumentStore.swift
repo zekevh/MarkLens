@@ -15,6 +15,7 @@ final class DocumentStore: ObservableObject {
     private var lastSavedText: String? = nil
     private var recentBookmarks: [String: Data] = [:]
     private let fileWatcher = FileWatcher()
+    private let recentDocumentsPersistence = RecentDocumentsPersistence()
 
     func loadFile(_ url: URL) {
         guard !url.hasDirectoryPath else { return }
@@ -49,38 +50,18 @@ final class DocumentStore: ObservableObject {
     func clearRecents() {
         recentURLs = []
         recentBookmarks = [:]
-        UserDefaults.standard.removeObject(forKey: "recentURLPaths")
-        UserDefaults.standard.removeObject(forKey: "recentBookmarks")
-        NSDocumentController.shared.clearRecentDocuments(nil)
+        recentDocumentsPersistence.clear()
     }
 
     func openRecent(_ url: URL) {
-        guard let bookmarkData = recentBookmarks[url.path] else {
+        guard recentBookmarks[url.path] != nil else {
             errorMessage = "Cannot access \"\(url.lastPathComponent)\" — please open it via File > Open."
             removeRecent(url)
             return
         }
 
-        var isStale = false
         do {
-            let scopedURL = try URL(
-                resolvingBookmarkData: bookmarkData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-            guard scopedURL.startAccessingSecurityScopedResource() else {
-                throw CocoaError(.fileReadNoPermission)
-            }
-            if isStale,
-               let refreshed = try? scopedURL.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-               ) {
-                recentBookmarks[url.path] = refreshed
-                UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
-            }
+            let scopedURL = try recentDocumentsPersistence.resolveRecentURL(url, bookmarks: &recentBookmarks)
             loadFile(scopedURL)
         } catch {
             errorMessage = "Cannot access \"\(url.lastPathComponent)\": \(error.localizedDescription)"
@@ -88,11 +69,9 @@ final class DocumentStore: ObservableObject {
     }
 
     func restoreRecents() {
-        recentBookmarks = (UserDefaults.standard.dictionary(forKey: "recentBookmarks") as? [String: Data]) ?? [:]
-        let storedPaths = UserDefaults.standard.stringArray(forKey: "recentURLPaths") ?? []
-        recentURLs = storedPaths
-            .filter { recentBookmarks[$0] != nil }
-            .map { URL(fileURLWithPath: $0) }
+        let state = recentDocumentsPersistence.restore()
+        recentURLs = state.recentURLs
+        recentBookmarks = state.bookmarks
     }
 
     func resolveConflict(keepMine: Bool) {
@@ -169,28 +148,11 @@ final class DocumentStore: ObservableObject {
     }
 
     func removeRecent(_ url: URL) {
-        recentURLs.removeAll { $0.path == url.path }
-        recentBookmarks.removeValue(forKey: url.path)
-        UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
-        UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
+        recentDocumentsPersistence.remove(url, recentURLs: &recentURLs, bookmarks: &recentBookmarks)
     }
 
     func recordRecent(_ url: URL) {
-        var list = recentURLs
-        list.removeAll { $0.path == url.path }
-        list.insert(url, at: 0)
-        recentURLs = Array(list.prefix(10))
-
-        if let bookmark = try? url.bookmarkData(
-            options: .withSecurityScope,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        ) {
-            recentBookmarks[url.path] = bookmark
-            UserDefaults.standard.set(recentBookmarks, forKey: "recentBookmarks")
-        }
-        UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentURLPaths")
-        NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        recentDocumentsPersistence.record(url, recentURLs: &recentURLs, bookmarks: &recentBookmarks)
     }
 
     private func reloadIfChangedOnDisk() {
