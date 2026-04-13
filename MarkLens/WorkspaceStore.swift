@@ -11,6 +11,7 @@ final class WorkspaceStore: ObservableObject {
     let folderWatcher = FolderWatcher()
 
     private let documentStore: DocumentStore
+    private let fileOperations: WorkspaceFileOperations
     private let persistence: WorkspacePersistence
     private var treeRebuildGeneration = 0
     private var workspaceSnapshot: WorkspaceSnapshot?
@@ -19,9 +20,11 @@ final class WorkspaceStore: ObservableObject {
 
     init(
         documentStore: DocumentStore,
+        fileOperations: WorkspaceFileOperations = WorkspaceFileOperations(),
         persistence: WorkspacePersistence = WorkspacePersistence()
     ) {
         self.documentStore = documentStore
+        self.fileOperations = fileOperations
         self.persistence = persistence
         self.pinnedURLs = persistence.loadPinnedURLs()
     }
@@ -72,20 +75,14 @@ final class WorkspaceStore: ObservableObject {
     func createFile(named fileName: String, contents: String = "") {
         let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
-        let normalizedName = trimmedName.lowercased().hasSuffix(".md") ? trimmedName : "\(trimmedName).md"
         let baseURL = rootFolderURL ?? documentStore.selectedFileURL?.deletingLastPathComponent()
         guard let dir = baseURL else { return }
 
-        let url = dir.appendingPathComponent(normalizedName)
-        guard !FileManager.default.fileExists(atPath: url.path) else {
-            documentStore.errorMessage = "\"\(url.lastPathComponent)\" already exists."
-            return
-        }
-
+        let url: URL
         do {
-            try contents.write(to: url, atomically: true, encoding: .utf8)
+            url = try fileOperations.createMarkdownFile(named: trimmedName, contents: contents, in: dir)
         } catch {
-            present(error, context: "Could not create \"\(url.lastPathComponent)\"")
+            present(error, context: "Could not create file")
             return
         }
 
@@ -119,14 +116,11 @@ final class WorkspaceStore: ObservableObject {
         let baseURL = rootFolderURL ?? documentStore.selectedFileURL?.deletingLastPathComponent()
         guard let dir = baseURL else { return }
 
-        var url = dir.appendingPathComponent("Untitled.md")
-        var counter = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-            url = dir.appendingPathComponent("Untitled \(counter).md")
-            counter += 1
-        }
-        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
-            documentStore.errorMessage = "Could not create \"\(url.lastPathComponent)\". Check folder permissions."
+        let url: URL
+        do {
+            url = try fileOperations.createUntitledMarkdownFile(in: dir)
+        } catch {
+            documentStore.errorMessage = error.localizedDescription
             return
         }
         if rootFolderURL != nil {
@@ -200,7 +194,7 @@ final class WorkspaceStore: ObservableObject {
 
     func deleteFile(_ url: URL) {
         do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            try fileOperations.trashItem(at: url)
         } catch {
             present(error, context: "Could not move \"\(url.lastPathComponent)\" to Trash")
             return
@@ -217,10 +211,10 @@ final class WorkspaceStore: ObservableObject {
     func renameFile(_ url: URL, to newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        let newURL = url.deletingLastPathComponent().appendingPathComponent(trimmed)
-        guard newURL.path != url.path else { return }
+        let newURL: URL
+        guard url.deletingLastPathComponent().appendingPathComponent(trimmed).path != url.path else { return }
         do {
-            try FileManager.default.moveItem(at: url, to: newURL)
+            newURL = try fileOperations.renameItem(at: url, to: trimmed)
         } catch {
             present(error, context: "Could not rename \"\(url.lastPathComponent)\"")
             return
@@ -259,45 +253,24 @@ final class WorkspaceStore: ObservableObject {
     func moveNodes(_ sourceURLs: [URL], into destinationFolderURL: URL) {
         guard destinationFolderURL.hasDirectoryPath else { return }
 
-        let uniqueSourceURLs = Array(Set(sourceURLs)).sorted { $0.path < $1.path }
-        guard !uniqueSourceURLs.isEmpty else { return }
-
-        let filteredSourceURLs = uniqueSourceURLs.filter { sourceURL in
-            let standardizedSourcePath = sourceURL.standardizedFileURL.path
-            return !uniqueSourceURLs.contains(where: {
-                $0 != sourceURL &&
-                standardizedSourcePath.hasPrefix($0.standardizedFileURL.path + "/")
-            })
+        let filteredSourceURLs: [URL]
+        do {
+            filteredSourceURLs = try fileOperations.validatedMoveSources(sourceURLs, into: destinationFolderURL)
+        } catch {
+            documentStore.errorMessage = error.localizedDescription
+            return
         }
         guard !filteredSourceURLs.isEmpty else { return }
-
-        for sourceURL in filteredSourceURLs {
-            guard sourceURL != destinationFolderURL else { continue }
-            guard sourceURL.deletingLastPathComponent() != destinationFolderURL else { continue }
-
-            let sourcePath = sourceURL.standardizedFileURL.path
-            let destinationPath = destinationFolderURL.standardizedFileURL.path
-            if destinationPath.hasPrefix(sourcePath + "/") {
-                documentStore.errorMessage = "Cannot move a folder into one of its own subfolders."
-                return
-            }
-
-            let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
-            guard !FileManager.default.fileExists(atPath: targetURL.path) else {
-                documentStore.errorMessage = "\"\(targetURL.lastPathComponent)\" already exists in \"\(destinationFolderURL.lastPathComponent)\"."
-                return
-            }
-        }
 
         var movedSelections: Set<URL> = []
         var reloadedURL: URL? = nil
         var updatedPinned = pinnedURLs
 
         for sourceURL in filteredSourceURLs {
-            let targetURL = destinationFolderURL.appendingPathComponent(sourceURL.lastPathComponent)
+            let targetURL: URL
 
             do {
-                try FileManager.default.moveItem(at: sourceURL, to: targetURL)
+                targetURL = try fileOperations.moveItem(at: sourceURL, into: destinationFolderURL)
             } catch {
                 present(error, context: "Could not move \"\(sourceURL.lastPathComponent)\"")
                 return
