@@ -10,9 +10,9 @@ struct NodeEditorView: View {
     var onLinkClick: ((String) -> Void)? = nil
 
     @StateObject private var manager = BlocksManager()
+    @StateObject private var commandController = NodeEditorCommandController()
     @Environment(\.undoManager) private var undoManager
     @State private var dropTargetID: UUID? = nil
-    @State private var debugBlocks = false
 
     var body: some View {
         ScrollView {
@@ -24,7 +24,7 @@ struct NodeEditorView: View {
                         searchText: searchText,
                         fileURL: fileURL,
                         isDropTarget: dropTargetID == block.id,
-                        debugBlocks: debugBlocks,
+                        debugBlocks: commandController.debugBlocks,
                         isBlockSelected: manager.allBlocksSelected,
                         registry: manager.registry,
                         onSplitBlock: { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
@@ -55,114 +55,7 @@ struct NodeEditorView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
-            NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak manager] event in
-                guard let manager else { return event }
-
-                switch event.type {
-                case .leftMouseDown:
-                    manager.allBlocksSelected = false
-                    manager.clearCrossBlockSelection()
-                    return event
-
-                default:
-                    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                    let ch = event.charactersIgnoringModifiers?.lowercased()
-                    if event.keyCode == 51 || event.keyCode == 117 {
-                        if manager.allBlocksSelected {
-                            manager.deleteAllSelectedBlocks()
-                            manager.allBlocksSelected = false
-                            manager.clearCrossBlockSelection()
-                            return nil
-                        }
-
-                        if (!manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil),
-                           let anchorTV = NSApp.keyWindow?.firstResponder as? BlockNSTextView {
-                            let registered = manager.registry.allRegistered()
-                            var cursorRanges: [UUID: NSRange] = [:]
-                            if let cursorID = manager.crossCursorID,
-                               let cursorTV = registered.first(where: { $0.0 == cursorID })?.1 as? BlockNSTextView,
-                               let range = cursorTV.crossBlockSelectionRange,
-                               range.length > 0 {
-                                cursorRanges[cursorID] = range
-                            }
-                            if manager.deleteCrossBlockSelection(
-                                anchorID: anchorTV.blockID,
-                                anchorRange: anchorTV.selectedRange(),
-                                cursorRangeByID: cursorRanges
-                            ) {
-                                manager.allBlocksSelected = false
-                                manager.clearCrossBlockSelection()
-                                return nil
-                            }
-                        }
-                    }
-                    if event.keyCode == 48 {
-                        if manager.allBlocksSelected {
-                            manager.indentBlocks(
-                                ids: Set(manager.blocks.map(\.id)),
-                                outdent: flags.contains(.shift)
-                            )
-                            return nil
-                        }
-
-                        if !manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil,
-                           let anchorID = (NSApp.keyWindow?.firstResponder as? BlockNSTextView)?.blockID {
-                            var ids = manager.crossSelectedIDs
-                            ids.insert(anchorID)
-                            if let cursorID = manager.crossCursorID { ids.insert(cursorID) }
-                            if ids.count > 1 {
-                                manager.indentBlocks(ids: ids, outdent: flags.contains(.shift))
-                                return nil
-                            }
-                        }
-                    }
-                    if flags == [.command, .shift] && ch == "d" {
-                        debugBlocks.toggle()
-                        return nil
-                    }
-                    if flags == .command && ch == "a" {
-                        manager.allBlocksSelected = true
-                        NSApp.keyWindow?.makeFirstResponder(nil)
-                        return nil
-                    }
-                    if flags == .command && ch == "c" {
-                        if manager.allBlocksSelected {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(serializeMarkdownBlocks(manager.blocks), forType: .string)
-                            return nil
-                        }
-                        if !manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil,
-                           let anchorTV = NSApp.keyWindow?.firstResponder as? BlockNSTextView {
-                            let anchorID = anchorTV.blockID
-                            let sel = anchorTV.selectedRange()
-                            let anchorText = sel.length > 0
-                                ? (anchorTV.string as NSString).substring(with: sel)
-                                : anchorTV.string
-                            let registered = manager.registry.allRegistered()
-                            var parts: [String] = []
-                            for block in manager.blocks {
-                                if block.id == anchorID {
-                                    parts.append(anchorText)
-                                } else if manager.crossSelectedIDs.contains(block.id) {
-                                    parts.append(block.content)
-                                } else if block.id == manager.crossCursorID,
-                                          let tv = registered.first(where: { $0.0 == block.id })?.1 as? BlockNSTextView,
-                                          let range = tv.crossBlockSelectionRange, range.length > 0 {
-                                    parts.append((tv.string as NSString).substring(with: range))
-                                }
-                            }
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(parts.joined(separator: "\n"), forType: .string)
-                            return nil
-                        }
-                    }
-                    if manager.allBlocksSelected { manager.allBlocksSelected = false }
-                    if !manager.crossSelectedIDs.isEmpty || manager.crossCursorID != nil {
-                        manager.clearCrossBlockSelection()
-                    }
-                    return event
-                }
-            }
+            commandController.installMonitor(manager: manager)
         }
         .onAppear {
             manager.undoManager = undoManager
@@ -223,6 +116,9 @@ struct NodeEditorView: View {
                 manager.crossSelectedIDs = crossIDs
                 manager.crossCursorID = newCursorID
             }
+        }
+        .onDisappear {
+            commandController.removeMonitor()
         }
         .onChange(of: undoManager) { _, um in
             manager.undoManager = um
