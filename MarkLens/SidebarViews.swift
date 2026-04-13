@@ -58,10 +58,7 @@ struct SidebarView: View {
             TextField("File name", text: $renameText)
             Button("Rename") {
                 if let url = renamingURL {
-                    let ext = url.pathExtension
-                    let newName = renameText.trimmingCharacters(in: .whitespaces)
-                    let finalName = newName.lowercased().hasSuffix(".\(ext)") ? newName : "\(newName).\(ext)"
-                    workspaceStore.renameFile(url, to: finalName)
+                    workspaceStore.renameFile(url, to: renameText)
                 }
                 renamingURL = nil
             }

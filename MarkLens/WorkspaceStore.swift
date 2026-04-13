@@ -72,6 +72,13 @@ final class WorkspaceStore: ObservableObject {
         pinnedFileNodes(from: rootNodes)
     }
 
+    func normalizedRenameTarget(for url: URL, requestedName: String) -> String {
+        let trimmedName = requestedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ext = url.pathExtension
+        guard !trimmedName.isEmpty, !ext.isEmpty else { return trimmedName }
+        return trimmedName.lowercased().hasSuffix(".\(ext)") ? trimmedName : "\(trimmedName).\(ext)"
+    }
+
     func createFile(named fileName: String, contents: String = "") {
         let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
@@ -86,12 +93,7 @@ final class WorkspaceStore: ObservableObject {
             return
         }
 
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        }
-        loadFile(url)
+        handleCreatedFile(at: url)
     }
 
     func restoreLastSession() {
@@ -123,12 +125,7 @@ final class WorkspaceStore: ObservableObject {
             documentStore.errorMessage = error.localizedDescription
             return
         }
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
-        }
-        loadFile(url)
+        handleCreatedFile(at: url)
     }
 
     func openFolderPanel() {
@@ -199,51 +196,22 @@ final class WorkspaceStore: ObservableObject {
             present(error, context: "Could not move \"\(url.lastPathComponent)\" to Trash")
             return
         }
-        selectedSidebarURLs.remove(url)
-        documentStore.clearSelectionIfSelectedFileMatches(url)
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = rootNodes.filter { $0.url != url }
-        }
+        handleDeletedFile(at: url)
     }
 
     func renameFile(_ url: URL, to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let normalizedName = normalizedRenameTarget(for: url, requestedName: trimmed)
         let newURL: URL
-        guard url.deletingLastPathComponent().appendingPathComponent(trimmed).path != url.path else { return }
+        guard url.deletingLastPathComponent().appendingPathComponent(normalizedName).path != url.path else { return }
         do {
-            newURL = try fileOperations.renameItem(at: url, to: trimmed)
+            newURL = try fileOperations.renameItem(at: url, to: normalizedName)
         } catch {
             present(error, context: "Could not rename \"\(url.lastPathComponent)\"")
             return
         }
-        if pinnedURLs.contains(url.absoluteString) {
-            pinnedURLs.remove(url.absoluteString)
-            pinnedURLs.insert(newURL.absoluteString)
-            persistence.savePinnedURLs(pinnedURLs)
-        }
-        if documentStore.hasRecent(url) {
-            documentStore.removeRecent(url)
-            documentStore.recordRecent(newURL)
-        }
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = rootNodes.map { node in
-                node.url == url
-                    ? FileNode(url: newURL, name: newURL.lastPathComponent, isDirectory: false)
-                    : node
-            }
-        }
-        if selectedSidebarURLs.contains(url) {
-            selectedSidebarURLs.remove(url)
-            selectedSidebarURLs.insert(newURL)
-        }
-        if documentStore.selectedFileURL == url {
-            loadFile(newURL)
-        }
+        handleRenamedFile(from: url, to: newURL)
     }
 
     func moveNode(_ sourceURL: URL, into destinationFolderURL: URL) {
@@ -262,9 +230,7 @@ final class WorkspaceStore: ObservableObject {
         }
         guard !filteredSourceURLs.isEmpty else { return }
 
-        var movedSelections: Set<URL> = []
-        var reloadedURL: URL? = nil
-        var updatedPinned = pinnedURLs
+        var movedURLsBySource: [URL: URL] = [:]
 
         for sourceURL in filteredSourceURLs {
             let targetURL: URL
@@ -275,39 +241,10 @@ final class WorkspaceStore: ObservableObject {
                 present(error, context: "Could not move \"\(sourceURL.lastPathComponent)\"")
                 return
             }
-
-            if updatedPinned.contains(sourceURL.absoluteString) {
-                updatedPinned.remove(sourceURL.absoluteString)
-                updatedPinned.insert(targetURL.absoluteString)
-            }
-
-            if documentStore.hasRecent(sourceURL) {
-                documentStore.removeRecent(sourceURL)
-                documentStore.recordRecent(targetURL)
-            }
-
-            if selectedSidebarURLs.contains(sourceURL) {
-                movedSelections.insert(targetURL)
-            }
-
-            if documentStore.selectedFileURL == sourceURL {
-                reloadedURL = targetURL
-            }
+            movedURLsBySource[sourceURL] = targetURL
         }
 
-        pinnedURLs = updatedPinned
-        persistence.savePinnedURLs(pinnedURLs)
-
-        selectedSidebarURLs.subtract(filteredSourceURLs)
-        selectedSidebarURLs.formUnion(movedSelections)
-
-        if rootFolderURL != nil {
-            rebuildTree()
-        }
-
-        if let reloadedURL {
-            loadFile(reloadedURL, syncSidebarSelection: false)
-        }
+        handleMovedFiles(movedURLsBySource)
     }
 
     func openExternalFile(_ url: URL) {
@@ -400,6 +337,87 @@ final class WorkspaceStore: ObservableObject {
 
     private func present(_ error: Error, context: String) {
         documentStore.errorMessage = "\(context): \(error.localizedDescription)"
+    }
+
+    private func handleCreatedFile(at url: URL) {
+        if rootFolderURL != nil {
+            rebuildTree()
+        } else {
+            rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+        }
+        loadFile(url)
+    }
+
+    private func handleDeletedFile(at url: URL) {
+        selectedSidebarURLs.remove(url)
+        documentStore.clearSelectionIfSelectedFileMatches(url)
+        if rootFolderURL != nil {
+            rebuildTree()
+        } else {
+            rootNodes = rootNodes.filter { $0.url != url }
+        }
+    }
+
+    private func handleRenamedFile(from oldURL: URL, to newURL: URL) {
+        syncPinnedURLs([oldURL: newURL])
+        syncRecentDocuments([oldURL: newURL])
+
+        if rootFolderURL != nil {
+            rebuildTree()
+        } else {
+            rootNodes = rootNodes.map { node in
+                node.url == oldURL
+                    ? FileNode(url: newURL, name: newURL.lastPathComponent, isDirectory: false)
+                    : node
+            }
+        }
+
+        selectedSidebarURLs = remappedSelection(selectedSidebarURLs, with: [oldURL: newURL])
+
+        if documentStore.selectedFileURL == oldURL {
+            loadFile(newURL)
+        }
+    }
+
+    private func handleMovedFiles(_ movedURLsBySource: [URL: URL]) {
+        syncPinnedURLs(movedURLsBySource)
+        syncRecentDocuments(movedURLsBySource)
+        selectedSidebarURLs = remappedSelection(selectedSidebarURLs, with: movedURLsBySource)
+
+        if rootFolderURL != nil {
+            rebuildTree()
+        }
+
+        if let selectedFileURL = documentStore.selectedFileURL,
+           let reloadedURL = movedURLsBySource[selectedFileURL] {
+            loadFile(reloadedURL, syncSidebarSelection: false)
+        }
+    }
+
+    private func syncPinnedURLs(_ remappedURLs: [URL: URL]) {
+        var updatedPinned = pinnedURLs
+        var didChange = false
+
+        for (oldURL, newURL) in remappedURLs where updatedPinned.contains(oldURL.absoluteString) {
+            updatedPinned.remove(oldURL.absoluteString)
+            updatedPinned.insert(newURL.absoluteString)
+            didChange = true
+        }
+
+        guard didChange else { return }
+        pinnedURLs = updatedPinned
+        persistence.savePinnedURLs(pinnedURLs)
+    }
+
+    private func syncRecentDocuments(_ remappedURLs: [URL: URL]) {
+        for (oldURL, newURL) in remappedURLs where documentStore.hasRecent(oldURL) {
+            documentStore.removeRecent(oldURL)
+            documentStore.recordRecent(newURL)
+        }
+    }
+
+    private func remappedSelection(_ selection: Set<URL>, with remappedURLs: [URL: URL]) -> Set<URL> {
+        Set(selection.map { remappedURLs[$0] ?? $0 })
     }
 
     private func firstFile(in nodes: [FileNode]) -> FileNode? {
