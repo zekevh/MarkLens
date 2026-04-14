@@ -15,53 +15,62 @@ struct NodeEditorView: View {
     @Environment(\.undoManager) private var undoManager
     @State private var dropTargetID: UUID? = nil
     @State private var lastHandledSearchJumpID: UUID? = nil
+    @State private var pendingInitialLayoutIDs: Set<UUID> = []
+    @State private var isEditorReady = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array($manager.blocks.enumerated()), id: \.element.id) { index, $block in
-                    BlockRowView(
-                        block: $block,
-                        index: index,
-                        searchText: searchText,
-                        fileURL: fileURL,
-                        isDropTarget: dropTargetID == block.id,
-                        debugBlocks: commandController.debugBlocks,
-                        isBlockSelected: manager.allBlocksSelected,
-                        registry: manager.registry,
-                        onSplitBlock: { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
-                        onMergeWithPrevious: { trailing in manager.mergeWithPrevious(block.id, trailing: trailing) },
-                        onNavigatePrevious: { placement in manager.navigatePrevious(from: block.id, placement: placement) },
-                        onNavigateNext: { placement in manager.navigateNext(from: block.id, placement: placement) }
-                    )
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let idString = items.first,
-                              let sourceID = UUID(uuidString: idString),
-                              sourceID != block.id,
-                              let from = manager.blocks.firstIndex(where: { $0.id == sourceID }),
-                              let to = manager.blocks.firstIndex(where: { $0.id == block.id })
-                        else { return false }
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            manager.moveBlock(from: from, to: to > from ? to + 1 : to)
+        ZStack {
+            Color(nsColor: .textBackgroundColor)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array($manager.blocks.enumerated()), id: \.element.id) { index, $block in
+                        BlockRowView(
+                            block: $block,
+                            index: index,
+                            searchText: searchText,
+                            fileURL: fileURL,
+                            isDropTarget: dropTargetID == block.id,
+                            debugBlocks: commandController.debugBlocks,
+                            isBlockSelected: manager.allBlocksSelected,
+                            registry: manager.registry,
+                            onSplitBlock: { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
+                            onMergeWithPrevious: { trailing in manager.mergeWithPrevious(block.id, trailing: trailing) },
+                            onNavigatePrevious: { placement in manager.navigatePrevious(from: block.id, placement: placement) },
+                            onNavigateNext: { placement in manager.navigateNext(from: block.id, placement: placement) },
+                            onInitialLayout: { handleInitialLayout(for: block.id) }
+                        )
+                        .dropDestination(for: String.self) { items, _ in
+                            guard let idString = items.first,
+                                  let sourceID = UUID(uuidString: idString),
+                                  sourceID != block.id,
+                                  let from = manager.blocks.firstIndex(where: { $0.id == sourceID }),
+                                  let to = manager.blocks.firstIndex(where: { $0.id == block.id })
+                            else { return false }
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                manager.moveBlock(from: from, to: to > from ? to + 1 : to)
+                            }
+                            return true
+                        } isTargeted: { targeted in
+                            dropTargetID = targeted ? block.id : nil
                         }
-                        return true
-                    } isTargeted: { targeted in
-                        dropTargetID = targeted ? block.id : nil
                     }
                 }
+                .padding(.leading, 8)
+                .padding(.trailing, 48)
+                .padding(.top, 20)
+                .padding(.bottom, 40)
             }
-            .padding(.leading, 8)
-            .padding(.trailing, 48)
-            .padding(.top, 20)
-            .padding(.bottom, 40)
+            .opacity(isEditorReady ? 1 : 0)
+            .offset(y: isEditorReady ? 0 : 10)
         }
-        .background(Color(nsColor: .textBackgroundColor))
         .onAppear {
             commandController.installMonitor(manager: manager)
         }
         .onAppear {
             manager.undoManager = undoManager
-            manager.load(from: text)
+            loadEditorText(text)
             manager.registry.onLinkClick = onLinkClick
             manager.registry.onCrossBlockDrag = { [weak manager] anchorID, mouseY in
                 guard let manager else { return }
@@ -134,12 +143,40 @@ struct NodeEditorView: View {
         .onChange(of: text) { _, newText in
             let serialized = serializeMarkdownBlocks(manager.blocks)
             guard newText != serialized else { return }
-            manager.load(from: newText)
+            loadEditorText(newText)
             applySearchJumpIfNeeded()
         }
         .onAppear { applySearchJumpIfNeeded() }
         .onChange(of: searchJumpRequest?.id) { _, _ in
             applySearchJumpIfNeeded()
+        }
+        .animation(.easeOut(duration: 0.18), value: isEditorReady)
+    }
+
+    private func loadEditorText(_ newText: String) {
+        isEditorReady = false
+        manager.load(from: newText)
+        let blockIDs = Set(manager.blocks.map(\.id))
+        pendingInitialLayoutIDs = blockIDs
+
+        if blockIDs.isEmpty {
+            isEditorReady = true
+            return
+        }
+
+        Task { @MainActor in
+            await Task.yield()
+            if pendingInitialLayoutIDs.isEmpty {
+                isEditorReady = true
+            }
+        }
+    }
+
+    private func handleInitialLayout(for blockID: UUID) {
+        guard pendingInitialLayoutIDs.contains(blockID) else { return }
+        pendingInitialLayoutIDs.remove(blockID)
+        if pendingInitialLayoutIDs.isEmpty {
+            isEditorReady = true
         }
     }
 

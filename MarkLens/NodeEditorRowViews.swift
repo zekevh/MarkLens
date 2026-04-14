@@ -39,10 +39,12 @@ struct BlockRowView: View {
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
+    var onInitialLayout: () -> Void
 
     @State private var height: CGFloat = 32
     @State private var isFrontMatterExpanded = false
     @State private var isHTMLEditing = false
+    @State private var hasReportedInitialLayout = false
 
     private var blockPadding: (top: CGFloat, bottom: CGFloat) {
         if block.kind == .frontMatter { return (top: 0, bottom: 18) }
@@ -190,7 +192,12 @@ struct BlockRowView: View {
             content: $block.content,
             searchText: searchText,
             registry: registry,
-            onHeightChange: { h in height = h },
+            onHeightChange: { h in
+                height = h
+                guard !hasReportedInitialLayout else { return }
+                hasReportedInitialLayout = true
+                onInitialLayout()
+            },
             onSplitBlock: onSplitBlock,
             onMergeWithPrevious: onMergeWithPrevious,
             onNavigatePrevious: onNavigatePrevious,
