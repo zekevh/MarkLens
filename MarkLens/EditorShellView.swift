@@ -14,7 +14,6 @@ struct MainEditorShell: View {
                         onTextChange: { documentStore.saveCurrentFile(text: $0) }
                     )
                     .id(documentStore.selectedFileURL)
-                    .ignoresSafeArea(.container, edges: .bottom)
                 } else {
                     NodeEditorView(
                         text: $documentStore.documentText,
@@ -24,11 +23,9 @@ struct MainEditorShell: View {
                         onLinkClick: { documentStore.handleLinkClick($0) }
                     )
                     .id(documentStore.selectedFileURL)
-                    .ignoresSafeArea(.container, edges: .bottom)
                 }
             } else {
                 EmptyEditorView()
-                    .ignoresSafeArea(.container, edges: .bottom)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
