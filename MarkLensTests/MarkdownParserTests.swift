@@ -34,6 +34,11 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertEqual(blocks[2].content, "C")
     }
 
+    @MainActor func testExtraSpacingBetweenBlocksPreservesEmptyBlock() {
+        let blocks = parseMarkdownBlocks("A\n\n\n\nB")
+        XCTAssertEqual(blocks.map(\.content), ["A", "", "B"])
+    }
+
     @MainActor func testLeadingAndTrailingBlankLinesStripped() {
         let blocks = parseMarkdownBlocks("\n\nHello\n\n")
         XCTAssertEqual(blocks.count, 1)
@@ -153,6 +158,15 @@ final class MarkdownParserTests: XCTestCase {
         XCTAssertEqual(serializeMarkdownBlocks(blocks), "A\n\nB\n\nC")
     }
 
+    @MainActor func testSerializePreservesEmptyMiddleBlock() {
+        let blocks = [
+            MarkdownBlock(content: "A"),
+            MarkdownBlock(content: ""),
+            MarkdownBlock(content: "B"),
+        ]
+        XCTAssertEqual(serializeMarkdownBlocks(blocks), "A\n\n\n\nB")
+    }
+
     // MARK: - Round-trip
 
     @MainActor func testRoundTripSimple() {
@@ -167,6 +181,11 @@ final class MarkdownParserTests: XCTestCase {
 
     @MainActor func testRoundTripWithTable() {
         let original = "Intro.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nOutro."
+        XCTAssertEqual(serializeMarkdownBlocks(parseMarkdownBlocks(original)), original)
+    }
+
+    @MainActor func testRoundTripWithIntentionalEmptyBlock() {
+        let original = "Intro\n\n\n\nOutro"
         XCTAssertEqual(serializeMarkdownBlocks(parseMarkdownBlocks(original)), original)
     }
 

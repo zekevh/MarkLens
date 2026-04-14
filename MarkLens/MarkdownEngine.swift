@@ -191,6 +191,7 @@ enum MarkdownEngine {
         var blocks: [String] = []
         var currentLines: [String] = []
         var inFencedCode = false
+        var pendingBlankLines = 0
 
         func flush() {
             var lines = currentLines
@@ -203,6 +204,13 @@ enum MarkdownEngine {
             currentLines = []
         }
 
+        func appendEmptyBlocksIfNeeded() {
+            guard !blocks.isEmpty else { return }
+            let emptyBlockCount = max(0, (pendingBlankLines - 1) / 2)
+            guard emptyBlockCount > 0 else { return }
+            blocks.append(contentsOf: Array(repeating: "", count: emptyBlockCount))
+        }
+
         for line in text.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
@@ -212,6 +220,11 @@ enum MarkdownEngine {
                     inFencedCode = false
                     flush()
                 } else {
+                    if pendingBlankLines > 0 {
+                        flush()
+                        appendEmptyBlocksIfNeeded()
+                        pendingBlankLines = 0
+                    }
                     flush()
                     inFencedCode = true
                     currentLines.append(line)
@@ -222,6 +235,17 @@ enum MarkdownEngine {
             if inFencedCode {
                 currentLines.append(line)
                 continue
+            }
+
+            if trimmed.isEmpty {
+                pendingBlankLines += 1
+                continue
+            }
+
+            if pendingBlankLines > 0 {
+                flush()
+                appendEmptyBlocksIfNeeded()
+                pendingBlankLines = 0
             }
 
             if trimmed.hasPrefix("|") {
@@ -239,12 +263,7 @@ enum MarkdownEngine {
                !trimmed.hasPrefix("|") {
                 flush()
             }
-
-            if trimmed.isEmpty {
-                flush()
-            } else {
-                currentLines.append(line)
-            }
+            currentLines.append(line)
         }
 
         flush()

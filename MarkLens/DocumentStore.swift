@@ -4,6 +4,8 @@ import Combine
 
 @MainActor
 final class DocumentStore: ObservableObject {
+    private static let autosaveDelay: TimeInterval = 1.0
+
     @Published var selectedFileURL: URL? = nil
     @Published var documentText: String = ""
     @Published var recentURLs: [URL] = []
@@ -12,20 +14,26 @@ final class DocumentStore: ObservableObject {
     @Published var isRawMode: Bool = false
 
     private var saveWorkItem: DispatchWorkItem?
-    private var lastSavedText: String? = nil
+    private var lastWrittenText: String? = nil
+    private var pendingSaveText: String? = nil
+    private var scheduledSaveID: Int = 0
     private var recentBookmarks: [String: Data] = [:]
     private let fileWatcher = FileWatcher()
     private let recentDocumentsPersistence = RecentDocumentsPersistence()
+    private let saveQueue = DispatchQueue(label: "MarkLens.DocumentStore.SaveQueue", qos: .utility)
 
     func loadFile(_ url: URL) {
         guard !url.hasDirectoryPath else { return }
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        pendingSaveText = nil
         do {
             documentText = try String(contentsOf: url, encoding: .utf8)
         } catch {
             errorMessage = "Could not open \"\(url.lastPathComponent)\": \(error.localizedDescription)"
             return
         }
-        lastSavedText = documentText
+        lastWrittenText = documentText
         selectedFileURL = url
         fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
         recordRecent(url)
@@ -79,7 +87,10 @@ final class DocumentStore: ObservableObject {
         externalEditConflict = nil
         if !keepMine {
             documentText = conflict.diskContent
-            lastSavedText = conflict.diskContent
+            lastWrittenText = conflict.diskContent
+            pendingSaveText = nil
+            saveWorkItem?.cancel()
+            saveWorkItem = nil
         }
     }
 
@@ -105,25 +116,54 @@ final class DocumentStore: ObservableObject {
             return
         }
         saveWorkItem?.cancel()
-        lastSavedText = text
+        pendingSaveText = text
+        scheduledSaveID += 1
+        let saveID = scheduledSaveID
         let item = DispatchWorkItem { [weak self] in
-            do {
-                try text.write(to: url, atomically: true, encoding: .utf8)
-            } catch {
+            self?.saveQueue.async { [weak self] in
+                do {
+                    try text.write(to: url, atomically: true, encoding: .utf8)
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.lastWrittenText = text
+                        if self.scheduledSaveID == saveID {
+                            self.pendingSaveText = nil
+                            self.saveWorkItem = nil
+                        }
+                    }
+                } catch {
                 DispatchQueue.main.async {
-                    self?.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
+                        guard let self else { return }
+                        if self.scheduledSaveID == saveID {
+                            self.saveWorkItem = nil
+                        }
+                        self.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
+                    }
                 }
             }
-            DispatchQueue.main.async { self?.saveWorkItem = nil }
         }
         saveWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.autosaveDelay, execute: item)
     }
 
     func flushPendingSave() {
-        saveWorkItem?.perform()
+        guard let url = selectedFileURL,
+              let pendingSaveText else {
+            saveWorkItem?.cancel()
+            saveWorkItem = nil
+            return
+        }
         saveWorkItem?.cancel()
         saveWorkItem = nil
+        do {
+            try saveQueue.sync {
+                try pendingSaveText.write(to: url, atomically: true, encoding: .utf8)
+            }
+            lastWrittenText = pendingSaveText
+            self.pendingSaveText = nil
+        } catch {
+            present(error, context: "Could not save \"\(url.lastPathComponent)\"")
+        }
     }
 
     func closeDocument(shouldClearRecents: Bool = false) {
@@ -131,6 +171,8 @@ final class DocumentStore: ObservableObject {
         fileWatcher.stop()
         selectedFileURL = nil
         documentText = ""
+        lastWrittenText = nil
+        pendingSaveText = nil
         externalEditConflict = nil
         if shouldClearRecents {
             clearRecents()
@@ -159,11 +201,12 @@ final class DocumentStore: ObservableObject {
         guard let url = selectedFileURL else { return }
         guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
         guard onDisk != documentText else { return }
-        guard onDisk != lastSavedText else { return }
+        guard onDisk != lastWrittenText else { return }
 
-        if documentText == lastSavedText {
+        if documentText == lastWrittenText {
             documentText = onDisk
-            lastSavedText = onDisk
+            lastWrittenText = onDisk
+            pendingSaveText = nil
         } else {
             externalEditConflict = ExternalEditConflict(
                 diskContent: onDisk,
