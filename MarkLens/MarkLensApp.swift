@@ -486,6 +486,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return event
         }
     }
+
 }
 
 private final class WeakViewBox {
