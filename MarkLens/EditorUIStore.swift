@@ -7,6 +7,7 @@ struct DocumentSearchJumpRequest: Equatable {
     let fileURL: URL
     let query: String
     let location: Int
+    var isCenteredScroll: Bool = false
 }
 
 @MainActor
@@ -76,7 +77,8 @@ final class EditorUIStore: ObservableObject {
             id: UUID(),
             fileURL: fileURL,
             query: "",
-            location: entry.characterOffset
+            location: entry.characterOffset,
+            isCenteredScroll: true
         )
     }
 

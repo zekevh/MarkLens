@@ -193,10 +193,10 @@ struct NodeEditorView: View {
               lastHandledSearchJumpID != request.id else { return }
 
         lastHandledSearchJumpID = request.id
-        focusSearchJump(at: request.location)
+        focusSearchJump(at: request.location, centered: request.isCenteredScroll)
     }
 
-    private func focusSearchJump(at absoluteLocation: Int) {
+    private func focusSearchJump(at absoluteLocation: Int, centered: Bool = false) {
         guard !manager.blocks.isEmpty else { return }
 
         let clampedLocation = max(0, absoluteLocation)
@@ -205,7 +205,7 @@ struct NodeEditorView: View {
         for (index, block) in manager.blocks.enumerated() {
             let blockLength = (block.content as NSString).length
             if clampedLocation <= cursor + blockLength {
-                manager.registry.focus(block.id, at: .position(clampedLocation - cursor))
+                manager.registry.focus(block.id, at: .position(clampedLocation - cursor), centered: centered)
                 return
             }
 
@@ -213,7 +213,7 @@ struct NodeEditorView: View {
             if index < manager.blocks.count - 1 {
                 let separatorLength = 2
                 if clampedLocation < cursor + separatorLength {
-                    manager.registry.focus(block.id, at: .end)
+                    manager.registry.focus(block.id, at: .end, centered: centered)
                     return
                 }
                 cursor += separatorLength
@@ -221,7 +221,7 @@ struct NodeEditorView: View {
         }
 
         if let lastBlock = manager.blocks.last {
-            manager.registry.focus(lastBlock.id, at: .end)
+            manager.registry.focus(lastBlock.id, at: .end, centered: centered)
         }
     }
 }

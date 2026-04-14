@@ -74,7 +74,11 @@ struct RawTextEditorView: NSViewRepresentable {
             let location = min(max(0, request.location), length)
             textView.window?.makeFirstResponder(textView)
             textView.setSelectedRange(NSRange(location: location, length: 0))
-            scrollCursorToVisible(in: textView)
+            if request.isCenteredScroll {
+                scrollCursorToCentered(in: textView)
+            } else {
+                scrollCursorToVisible(in: textView)
+            }
         }
     }
 }

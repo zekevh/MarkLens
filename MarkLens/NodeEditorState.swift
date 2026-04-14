@@ -27,32 +27,32 @@ final class BlockRegistry: ObservableObject {
         ref.value = tv
         store[id] = ref
         if pendingID == id {
-            applyFocus(to: tv, placement: pendingPlacement)
+            applyFocus(to: tv, placement: pendingPlacement, centered: false)
             pendingID = nil
         }
     }
 
-    func focus(_ id: UUID, at placement: CursorPlacement) {
+    func focus(_ id: UUID, at placement: CursorPlacement, centered: Bool = false) {
         if let tv = store[id]?.value, tv.window != nil {
-            applyFocus(to: tv, placement: placement)
+            applyFocus(to: tv, placement: placement, centered: centered)
         } else {
             pendingID = id
             pendingPlacement = placement
         }
     }
 
-    private func applyFocus(to tv: NSTextView, placement: CursorPlacement) {
+    private func applyFocus(to tv: NSTextView, placement: CursorPlacement, centered: Bool) {
         if tv.window != nil {
-            doFocus(tv, placement: placement)
+            doFocus(tv, placement: placement, centered: centered)
         } else {
             Task { @MainActor [weak tv] in
                 guard let tv else { return }
-                self.doFocus(tv, placement: placement)
+                self.doFocus(tv, placement: placement, centered: centered)
             }
         }
     }
 
-    private func doFocus(_ tv: NSTextView, placement: CursorPlacement) {
+    private func doFocus(_ tv: NSTextView, placement: CursorPlacement, centered: Bool) {
         tv.window?.makeFirstResponder(tv)
         let pos: Int
         switch placement {
@@ -64,7 +64,11 @@ final class BlockRegistry: ObservableObject {
             pos = min(max(p, 0), tv.string.count)
         }
         tv.setSelectedRange(NSRange(location: pos, length: 0))
-        Task { scrollCursorToVisible(in: tv) }
+        if centered {
+            Task { scrollCursorToCentered(in: tv) }
+        } else {
+            Task { scrollCursorToVisible(in: tv) }
+        }
     }
 }
 
@@ -397,6 +401,46 @@ func scrollCursorToVisible(in textView: NSTextView) {
     NSAnimationContext.runAnimationGroup { ctx in
         ctx.duration = 0.12
         outerSV.contentView.animator().scrollToVisible(target)
+    }
+}
+
+/// Scrolls so the cursor line lands at roughly 30 % from the top of the
+/// visible area — used for outline-panel jumps so the heading isn't buried
+/// at the very bottom of the viewport.
+@MainActor
+func scrollCursorToCentered(in textView: NSTextView) {
+    guard let lm = textView.layoutManager,
+          let tc = textView.textContainer else { return }
+    let charRange = textView.selectedRange()
+    guard charRange.location != NSNotFound else { return }
+    lm.ensureLayout(for: tc)
+    let glyphCount = lm.numberOfGlyphs
+    guard glyphCount > 0 else { return }
+    let loc = min(charRange.location, textView.string.count)
+    let glyphIndex = loc < textView.string.count ? lm.glyphIndexForCharacter(at: loc) : glyphCount - 1
+    var lineRect = lm.lineFragmentRect(forGlyphAt: min(glyphIndex, glyphCount - 1), effectiveRange: nil)
+    lineRect = lineRect.offsetBy(dx: textView.textContainerInset.width,
+                                 dy: textView.textContainerInset.height)
+    var outerSV: NSScrollView?
+    var view: NSView? = textView.superview
+    while let v = view {
+        if let sv = v as? NSScrollView, sv.documentView !== textView {
+            outerSV = sv
+            break
+        }
+        view = v.superview
+    }
+    guard let outerSV, let docView = outerSV.documentView else { return }
+    let lineInDoc = textView.convert(lineRect, to: docView)
+    let visibleHeight = outerSV.contentView.bounds.height
+    let docHeight = docView.bounds.height
+    // Place the line at ~30 % from the top of the visible area
+    let desiredOriginY = lineInDoc.midY - visibleHeight * 0.3
+    let clampedY = max(0, min(desiredOriginY, docHeight - visibleHeight))
+    NSAnimationContext.runAnimationGroup { ctx in
+        ctx.duration = 0.22
+        ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        outerSV.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: clampedY))
     }
 }
 
