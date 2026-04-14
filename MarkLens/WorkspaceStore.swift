@@ -7,6 +7,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var rootNodes: [FileNode] = []
     @Published var selectedSidebarURLs: Set<URL> = []
     @Published var pinnedURLs: Set<String>
+    @Published private(set) var gitChanges: [String: GitFileChange] = [:]
+    @Published private(set) var gitRepositoryInfo: GitRepositoryInfo? = nil
 
     let folderWatcher = FolderWatcher()
 
@@ -43,6 +45,7 @@ final class WorkspaceStore: ObservableObject {
             self.workspaceSnapshot = snapshot
             self.rootNodes = snapshot.nodes
             self.applyFolderWatch(snapshot)
+            self.refreshGitChanges(for: snapshot.rootFolder, generation: generation)
             onComplete?(snapshot.nodes)
         }
     }
@@ -109,6 +112,8 @@ final class WorkspaceStore: ObservableObject {
         treeRebuildGeneration += 1
         rootFolderURL = nil
         workspaceSnapshot = nil
+        gitChanges = [:]
+        gitRepositoryInfo = nil
         persistence.saveRootFolderURL(nil)
         rootNodes = []
         selectedSidebarURLs = []
@@ -157,6 +162,8 @@ final class WorkspaceStore: ObservableObject {
             self.persistence.saveRootFolderURL(nil)
             self.folderWatcher.stopAll()
             self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+            self.gitChanges = [:]
+            self.gitRepositoryInfo = nil
             self.documentStore.loadFile(url)
         }
     }
@@ -260,6 +267,8 @@ final class WorkspaceStore: ObservableObject {
                 self.folderWatcher.stopAll()
                 self.rootFolderURL = nil
                 self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+                self.gitChanges = [:]
+                self.gitRepositoryInfo = nil
                 self.loadFile(url)
             }
             return
@@ -267,6 +276,8 @@ final class WorkspaceStore: ObservableObject {
         folderWatcher.stopAll()
         rootFolderURL = nil
         rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
+        gitChanges = [:]
+        gitRepositoryInfo = nil
         loadFile(url)
     }
 
@@ -302,7 +313,12 @@ final class WorkspaceStore: ObservableObject {
             self.workspaceSnapshot = refreshedSnapshot
             self.rootNodes = refreshedSnapshot.nodes
             self.applyFolderWatch(refreshedSnapshot)
+            self.refreshGitChanges(for: rootFolderURL, generation: generation)
         }
+    }
+
+    func gitChange(for url: URL) -> GitFileChange? {
+        gitChanges[url.standardizedFileURL.path]
     }
 
     private func preferredSidebarFileSelection(oldSelection: Set<URL>, newSelection: Set<URL>) -> URL? {
@@ -433,13 +449,23 @@ final class WorkspaceStore: ObservableObject {
     }
 
     private func findGitRoot(for url: URL) -> URL? {
-        var dir = url.deletingLastPathComponent()
-        while dir.pathComponents.count > 1 {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(".git").path) {
-                return dir
-            }
-            dir = dir.deletingLastPathComponent()
+        GitStatusService.gitRoot(for: url)
+    }
+
+    private func refreshGitChanges(for workspaceURL: URL, generation: Int) {
+        Task { @MainActor [weak self] in
+            async let changesTask = GitStatusService.loadChanges(for: workspaceURL)
+            async let infoTask = GitStatusService.loadRepositoryInfo(for: workspaceURL)
+            let changes = await changesTask
+            let info = await infoTask
+            guard let self else { return }
+            guard self.treeRebuildGeneration == generation, self.rootFolderURL == workspaceURL else { return }
+            self.gitChanges = changes
+            self.gitRepositoryInfo = info
+            AppLogger.info(
+                "Workspace \(workspaceURL.lastPathComponent) git refresh loaded \(changes.count) changes",
+                category: "Workspace"
+            )
         }
-        return nil
     }
 }

@@ -249,6 +249,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startMCPServer() {
+        guard !isRunningInAppSandbox else {
+            AppLogger.info("MCP server disabled because the app is running inside the App Sandbox", category: "MCP")
+            return
+        }
+
         let server = MCPServer(
             openFile: { @MainActor [weak self] url in
                 self?.keyAppState?.workspaceStore.openExternalFile(url)
@@ -265,8 +270,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mcpServer = server
         Task {
             do { try await server.start() }
-            catch { print("[MCPServer] Failed to start on port \(MCPServer.port): \(error)") }
+            catch { AppLogger.error("Failed to start MCP server on port \(MCPServer.port): \(error)", category: "MCP") }
         }
+    }
+
+    private var isRunningInAppSandbox: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {

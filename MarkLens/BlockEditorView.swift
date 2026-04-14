@@ -134,7 +134,7 @@ struct BlockEditorView: NSViewRepresentable {
             tv.undoManager?.enableUndoRegistration()
             coord.isLoading = false
             coord.onTextChange(newBefore)
-            coord.updateHeight(for: tv)
+            coord.scheduleHeightUpdate(for: tv)
             coord.onSplitBlock(originalContent, loc, newBefore, newAfter, cursorPos)
         }
         textView.onBackspaceAtStart = { [weak coord, weak textView] in
@@ -166,7 +166,7 @@ struct BlockEditorView: NSViewRepresentable {
 
         Task { [weak textView] in
             guard let tv = textView else { return }
-            coord.updateHeight(for: tv)
+            coord.scheduleHeightUpdate(for: tv)
         }
         return scroll
     }
@@ -193,7 +193,7 @@ struct BlockEditorView: NSViewRepresentable {
             let coord = context.coordinator
             Task { [weak textView] in
                 guard let tv = textView else { return }
-                coord.updateHeight(for: tv)
+                coord.scheduleHeightUpdate(for: tv)
             }
         }
 
@@ -544,6 +544,8 @@ final class BlockNSTextView: NSTextView {
 final class BlockEditorCoordinator: NSObject {
     private let highlighter: EditorCoordinator
     private let blockKind: MarkdownBlockKind
+    private var lastReportedHeight: CGFloat = 24
+    private var heightUpdatePending = false
 
     var onTextChange: (String) -> Void
     var onHeightChange: (CGFloat) -> Void
@@ -585,12 +587,28 @@ final class BlockEditorCoordinator: NSObject {
         highlighter.applySearchHighlights(to: textView, query: query)
     }
 
-    func updateHeight(for textView: NSTextView) {
+    func scheduleHeightUpdate(for textView: NSTextView) {
+        guard !heightUpdatePending else { return }
+        heightUpdatePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self, weak textView] in
+            guard let self, let textView else { return }
+            self.heightUpdatePending = false
+            self.updateHeight(for: textView)
+        }
+    }
+
+    private func updateHeight(for textView: NSTextView) {
         guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
-        lm.ensureLayout(for: tc)
         let rect = lm.usedRect(for: tc)
         let inset = textView.textContainerInset
-        onHeightChange(max(ceil(rect.height) + inset.height * 2, 24))
+        let newHeight = max(ceil(rect.height) + inset.height * 2, 24)
+        guard abs(newHeight - lastReportedHeight) > 0.5 else { return }
+        lastReportedHeight = newHeight
+
+        // Avoid publishing SwiftUI state changes from within AppKit layout/update passes.
+        DispatchQueue.main.async { [newHeight, onHeightChange] in
+            onHeightChange(newHeight)
+        }
     }
 
     private func removeCodeFenceBackgroundIfNeeded(from storage: NSTextStorage) {
@@ -708,7 +726,7 @@ extension BlockEditorCoordinator: NSTextViewDelegate {
         tv.typingAttributes = Styles.baseAttributes
         Task { [weak self, weak tv] in
             guard let self, let tv else { return }
-            self.updateHeight(for: tv)
+            self.scheduleHeightUpdate(for: tv)
             scrollCursorToVisible(in: tv)
         }
     }

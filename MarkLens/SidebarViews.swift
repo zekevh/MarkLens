@@ -30,7 +30,9 @@ struct SidebarView: View {
                 List(selection: Binding(
                     get: { workspaceStore.selectedSidebarURLs },
                     set: { urls in
-                        workspaceStore.updateSidebarSelection(urls)
+                        DispatchQueue.main.async {
+                            workspaceStore.updateSidebarSelection(urls)
+                        }
                     }
                 )) {
                     if !workspaceStore.pinnedFileNodes.isEmpty {
@@ -49,6 +51,9 @@ struct SidebarView: View {
                 }
                 .listStyle(.sidebar)
                 .accessibilityIdentifier("sidebarList")
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    SidebarGitFooter()
+                }
             }
         }
         .alert("Rename File", isPresented: Binding(
@@ -144,6 +149,41 @@ struct SidebarView: View {
     }
 }
 
+private struct SidebarGitFooter: View {
+    @EnvironmentObject var workspaceStore: WorkspaceStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            if let repo = workspaceStore.gitRepositoryInfo {
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text(repo.remoteName)
+                        Text(repo.branchName)
+                            .foregroundStyle(.secondary)
+                    }
+                    .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    HStack(spacing: 10) {
+                        Text("+\(repo.diffSummary.added)")
+                            .foregroundStyle(.green)
+                        Text("-\(repo.diffSummary.deleted)")
+                            .foregroundStyle(.red)
+                    }
+                    .monospacedDigit()
+                }
+                .font(.caption)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
+        }
+    }
+}
+
 struct RecentFilesView: View {
     @EnvironmentObject var documentStore: DocumentStore
     @EnvironmentObject var workspaceStore: WorkspaceStore
@@ -151,7 +191,12 @@ struct RecentFilesView: View {
     var body: some View {
         List(documentStore.recentURLs, id: \.path, selection: Binding(
             get: { documentStore.selectedFileURL },
-            set: { url in if let url { documentStore.openRecent(url) } }
+            set: { url in
+                guard let url else { return }
+                DispatchQueue.main.async {
+                    documentStore.openRecent(url)
+                }
+            }
         )) { url in
             VStack(alignment: .leading, spacing: 2) {
                 Text(url.lastPathComponent)
@@ -191,19 +236,64 @@ struct SidebarRow: View {
     let node: FileNode
 
     var body: some View {
-        Label {
+        HStack(spacing: 8) {
+            Image(systemName: node.isDirectory ? "folder" : "doc.text")
+                .frame(width: 16, alignment: .center)
+
+            Text(node.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
             HStack(spacing: 4) {
-                Text(node.name).lineLimit(1).truncationMode(.middle)
                 if !node.isDirectory && workspaceStore.isPinned(node.url) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
+                        .fixedSize()
+                }
+                if !node.isDirectory, let gitChange = workspaceStore.gitChange(for: node.url) {
+                    GitChangeBadge(change: gitChange)
                 }
             }
-        } icon: {
-            Image(systemName: node.isDirectory ? "folder" : "doc.text")
+            .frame(minWidth: 28, alignment: .trailing)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("sidebarRow-\(node.name)")
+    }
+}
+
+private struct GitChangeBadge: View {
+    let change: GitFileChange
+
+    private var label: String {
+        switch change {
+        case .new:
+            return "N"
+        case .modified:
+            return "M"
+        }
+    }
+
+    private var tint: Color {
+        switch change {
+        case .new:
+            return .green
+        case .modified:
+            return .orange
+        }
+    }
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(tint.opacity(0.12), in: Capsule())
+            .fixedSize()
+            .accessibilityLabel(change == .new ? "New file" : "Modified file")
     }
 }
 

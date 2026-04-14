@@ -2,6 +2,13 @@ import SwiftUI
 import AppKit
 
 private struct DragStrip: View {
+    private static let handleSymbolName: String = {
+        if NSImage(systemSymbolName: "circle.grid.2x3.fill", accessibilityDescription: nil) != nil {
+            return "circle.grid.2x3.fill"
+        }
+        return "line.3.horizontal"
+    }()
+
     let blockID: UUID
     let height: CGFloat
     @State private var hovered = false
@@ -15,7 +22,7 @@ private struct DragStrip: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .overlay {
-                        Image(systemName: "circle.grid.2x3.fill")
+                        Image(systemName: Self.handleSymbolName)
                             .font(.system(size: 10))
                             .foregroundStyle(Color.secondary.opacity(hovered ? 0.5 : 0))
                     }
