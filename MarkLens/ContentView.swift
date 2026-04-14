@@ -6,6 +6,7 @@ struct ContentView: View {
     @EnvironmentObject var documentStore: DocumentStore
     @EnvironmentObject var workspaceStore: WorkspaceStore
     @EnvironmentObject var editorUIStore: EditorUIStore
+    @EnvironmentObject var quickOpenStore: QuickOpenStore
     @FocusState private var isSearchFocused: Bool
     private let environment = ProcessInfo.processInfo.environment
 
@@ -14,11 +15,17 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $appState.sidebarVisibility) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 320)
-        } detail: {
-            MainEditorShell()
+        ZStack {
+            NavigationSplitView(columnVisibility: $appState.sidebarVisibility) {
+                SidebarView()
+                    .navigationSplitViewColumnWidth(min: 180, ideal: 240, max: 320)
+            } detail: {
+                MainEditorShell()
+            }
+            .disabled(quickOpenStore.isPresented)
+
+            QuickOpenOverlay()
+                .zIndex(1)
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar { contentToolbar }

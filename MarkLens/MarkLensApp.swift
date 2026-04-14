@@ -18,10 +18,26 @@ final class AppState: ObservableObject {
     let documentStore = DocumentStore()
     let workspaceStore: WorkspaceStore
     let editorUIStore: EditorUIStore
+    let quickOpenStore: QuickOpenStore
+
+    var searchText: String {
+        get { editorUIStore.searchText }
+        set { editorUIStore.searchText = newValue }
+    }
+
+    var replaceText: String {
+        get { editorUIStore.replaceText }
+        set { editorUIStore.replaceText = newValue }
+    }
+
+    var searchMatchCount: Int {
+        editorUIStore.searchMatchCount
+    }
 
     init() {
         workspaceStore = WorkspaceStore(documentStore: documentStore)
         editorUIStore = EditorUIStore(documentStore: documentStore)
+        quickOpenStore = QuickOpenStore(workspaceStore: workspaceStore)
     }
 
     func restoreLastSession() {
@@ -31,6 +47,14 @@ final class AppState: ObservableObject {
     func flushPendingSave() {
         documentStore.flushPendingSave()
     }
+
+    func replaceNext() {
+        editorUIStore.replaceNext()
+    }
+
+    func replaceAll() {
+        editorUIStore.replaceAll()
+    }
 }
 
 // MARK: - Window Accessor
@@ -38,17 +62,21 @@ final class AppState: ObservableObject {
 /// Retrieves the hosting NSWindow for a SwiftUI view so AppDelegate can map
 /// windows to their isolated AppState instances.
 private struct WindowAccessor: NSViewRepresentable {
-    let onWindow: (NSWindow) -> Void
+    let onWindow: (NSWindow, NSView) -> Void
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = WindowFocusAnchorView()
         DispatchQueue.main.async {
-            if let window = view.window { self.onWindow(window) }
+            if let window = view.window { self.onWindow(window, view) }
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class WindowFocusAnchorView: NSView {
+    override var acceptsFirstResponder: Bool { true }
 }
 
 // MARK: - Commands
@@ -62,7 +90,7 @@ private struct AppCommands: Commands {
     /// @FocusedObject can be nil on first launch before any window interaction.
     /// Fall back to AppDelegate's tracked key window state.
     private var activeState: AppState? {
-        appState ?? (NSApp.delegate as? AppDelegate)?.keyAppState
+        appState ?? (NSApp.delegate as? AppDelegate)?.activeAppState
     }
 
     /// Resolve the same UndoManager the focused editor/view is using so menu state
@@ -81,11 +109,30 @@ private struct AppCommands: Commands {
         NSApp.sendAction(Selector(("redo:")), to: nil, from: nil)
     }
 
+    private func performNewFile() {
+        (NSApp.delegate as? AppDelegate)?.performNewFile()
+    }
+
+    private func performQuickOpen() {
+        (NSApp.delegate as? AppDelegate)?.performQuickOpen()
+    }
+
+    private func performOpenFile() {
+        (NSApp.delegate as? AppDelegate)?.performOpenFile()
+    }
+
+    private func performOpenFolder() {
+        (NSApp.delegate as? AppDelegate)?.performOpenFolder()
+    }
+
+    private func performCloseFolder() {
+        (NSApp.delegate as? AppDelegate)?.performCloseFolder()
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New File") { activeState?.workspaceStore.createFile() }
+            Button("New File") { performNewFile() }
                 .keyboardShortcut("n", modifiers: .command)
-                .disabled(activeState == nil)
             Button("New Window") { openWindow(id: "main") }
                 .keyboardShortcut("n", modifiers: [.command, .option])
         }
@@ -102,14 +149,15 @@ private struct AppCommands: Commands {
         }
         CommandGroup(after: .newItem) {
             Divider()
-            Button("Open File…") { activeState?.workspaceStore.openFilePanel() }
+            Button("Open File…") { performOpenFile() }
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Open Folder…") { activeState?.workspaceStore.openFolderPanel() }
+            Button("Open Folder…") { performOpenFolder() }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Go to File…") { performQuickOpen() }
+                .keyboardShortcut("p", modifiers: .command)
             Divider()
-            Button("Close Folder") { activeState?.workspaceStore.closeFolder() }
+            Button("Close Folder") { performCloseFolder() }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
-                .disabled(activeState?.workspaceStore.rootNodes.isEmpty ?? true)
         }
         CommandGroup(replacing: .toolbar) {
             Button((activeState?.sidebarVisibility ?? .all) == .all ? "Hide Sidebar" : "Show Sidebar") {
@@ -125,10 +173,8 @@ private struct AppCommands: Commands {
         CommandGroup(after: .textEditing) {
             Button("Find…") { activeState?.editorUIStore.showFindBar() }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(activeState?.documentStore.selectedFileURL == nil)
             Button("Replace…") { activeState?.editorUIStore.showFindBar(showReplace: true) }
                 .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(activeState?.documentStore.selectedFileURL == nil)
         }
         CommandGroup(after: .toolbar) {
             Button((activeState?.editorUIStore.isPathBarVisible ?? true) ? "Hide Path Bar" : "Show Path Bar") {
@@ -148,7 +194,6 @@ private struct AppCommands: Commands {
                 state.documentStore.isRawMode.toggle()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(activeState?.documentStore.selectedFileURL == nil)
         }
     }
 }
@@ -169,9 +214,10 @@ private struct WindowView: View {
             .environmentObject(appState.documentStore)
             .environmentObject(appState.editorUIStore)
             .environmentObject(appState.workspaceStore)
+            .environmentObject(appState.quickOpenStore)
             .focusedObject(appState)
-            .background(WindowAccessor { window in
-                appDelegate.register(window: window, state: appState)
+            .background(WindowAccessor { window, anchorView in
+                appDelegate.register(window: window, state: appState, focusAnchor: anchorView)
             })
             .onAppear {
                 let shouldRestore = environment[UITestLaunchEnvironment.disableRestore] != "1"
@@ -217,6 +263,7 @@ private struct WindowView: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Maps each NSWindow (by pointer identity) to the AppState it hosts.
     private var windowStates: [NSValue: AppState] = [:]
+    private var windowFocusAnchors: [NSValue: WeakViewBox] = [:]
 
     /// The AppState belonging to the currently key (frontmost) window.
     private(set) weak var keyAppState: AppState?
@@ -226,13 +273,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var pendingFileURL: URL?
 
     private var mcpServer: MCPServer?
+    private var appHotkeyMonitor: Any?
 
-    func register(window: NSWindow, state: AppState) {
-        windowStates[NSValue(nonretainedObject: window)] = state
+    var activeAppState: AppState? {
+        appState(for: NSApp.keyWindow)
+            ?? appState(for: NSApp.mainWindow)
+            ?? keyAppState
+            ?? windowStates.values.first
+    }
+
+    func register(window: NSWindow, state: AppState, focusAnchor: NSView) {
+        let key = NSValue(nonretainedObject: window)
+        windowStates[key] = state
+        windowFocusAnchors[key] = WeakViewBox(view: focusAnchor)
         if let url = pendingFileURL {
             pendingFileURL = nil
             state.workspaceStore.openExternalFile(url)
         }
+    }
+
+    func appState(for window: NSWindow?) -> AppState? {
+        guard let window else { return nil }
+        return windowStates[NSValue(nonretainedObject: window)]
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -245,7 +307,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeKeyNotification,
             object: nil
         )
+        installAppHotkeyMonitor()
         startMCPServer()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.orderedWindows.first {
+            restoreFocus(for: window)
+        }
     }
 
     private func startMCPServer() {
@@ -300,9 +369,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        removeAppHotkeyMonitor()
         // Flush pending debounced saves in every open window before quitting.
         windowStates.values.forEach { $0.flushPendingSave() }
         return .terminateNow
+    }
+
+    func performNewFile() {
+        activeAppState?.workspaceStore.createFile()
+    }
+
+    func performQuickOpen() {
+        activeAppState?.quickOpenStore.show()
+    }
+
+    func performOpenFile() {
+        activeAppState?.workspaceStore.openFilePanel()
+    }
+
+    func performOpenFolder() {
+        activeAppState?.workspaceStore.openFolderPanel()
+    }
+
+    func performCloseFolder() {
+        activeAppState?.workspaceStore.closeFolder()
     }
 
     @objc @MainActor private func windowDidBecomeKey(_ notification: Notification) {
@@ -315,6 +405,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let state = windowStates[NSValue(nonretainedObject: window)] {
             keyAppState = state
         }
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.restoreFocus(for: window, forceKeyWindow: false)
+        }
+    }
+
+    private func restoreFocus(for window: NSWindow, forceKeyWindow: Bool = true) {
+        if forceKeyWindow, !window.isKeyWindow {
+            window.makeKeyAndOrderFront(nil)
+        }
+        keyAppState = appState(for: window) ?? keyAppState
+
+        guard let anchorView = windowFocusAnchors[NSValue(nonretainedObject: window)]?.view else { return }
+        let responderNeedsRepair =
+            window.firstResponder == nil ||
+            window.firstResponder === window ||
+            window.firstResponder === window.contentView
+
+        if responderNeedsRepair {
+            window.makeFirstResponder(anchorView)
+        }
+    }
+
+    private func installAppHotkeyMonitor() {
+        guard appHotkeyMonitor == nil else { return }
+        appHotkeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            return self.handleAppHotkey(event)
+        }
+    }
+
+    private func removeAppHotkeyMonitor() {
+        guard let appHotkeyMonitor else { return }
+        NSEvent.removeMonitor(appHotkeyMonitor)
+        self.appHotkeyMonitor = nil
+    }
+
+    private func handleAppHotkey(_ event: NSEvent) -> NSEvent? {
+        guard NSApp.isActive else { return event }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard let characters = event.charactersIgnoringModifiers?.lowercased() else {
+            return event
+        }
+
+        switch (flags, characters) {
+        case (.command, "n"):
+            performNewFile()
+            return nil
+        case (.command, "p"):
+            performQuickOpen()
+            return nil
+        case (.command, "o"):
+            performOpenFile()
+            return nil
+        case ([.command, .shift], "o"):
+            performOpenFolder()
+            return nil
+        case ([.command, .option], "n"):
+            NotificationCenter.default.post(name: .marklensOpenNewWindow, object: nil)
+            return nil
+        case ([.command, .shift], "w"):
+            performCloseFolder()
+            return nil
+        default:
+            return event
+        }
+    }
+}
+
+private final class WeakViewBox {
+    weak var view: NSView?
+
+    init(view: NSView) {
+        self.view = view
     }
 }
 
