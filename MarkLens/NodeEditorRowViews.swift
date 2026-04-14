@@ -152,7 +152,7 @@ struct BlockRowView: View {
                             .padding(.horizontal, 2)
 
                             editorView
-                                .frame(height: max(height, 96))
+                                .frame(height: max(height, 24))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 12)
                                 .background {

@@ -73,8 +73,6 @@ struct BlockEditorView: NSViewRepresentable {
         let storage = NSTextStorage()
         let layout = MarkdownLayoutManager()
         let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        container.widthTracksTextView = true
-        container.lineFragmentPadding = 0
         layout.addTextContainer(container)
         storage.addLayoutManager(layout)
 
@@ -82,6 +80,7 @@ struct BlockEditorView: NSViewRepresentable {
         textView.blockID = blockID
         textView.registry = registry
         configureTextView(textView)
+        configureTextContainer(container, for: textView)
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
 
@@ -158,11 +157,12 @@ struct BlockEditorView: NSViewRepresentable {
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = false
-        scroll.hasHorizontalScroller = false
+        scroll.hasHorizontalScroller = blockKind == .table
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.documentView = textView
-        textView.autoresizingMask = [.width]
+        textView.autoresizingMask = blockKind == .table ? [.height] : [.width]
 
         Task { [weak textView] in
             guard let tv = textView else { return }
@@ -223,12 +223,9 @@ struct BlockEditorView: NSViewRepresentable {
         tv.backgroundColor = .clear
         tv.drawsBackground = false
         tv.isVerticallyResizable = true
-        tv.isHorizontallyResizable = false
         tv.minSize = .zero
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         tv.textContainerInset = NSSize(width: 0, height: 4)
-        tv.textContainer?.widthTracksTextView = true
-        tv.textContainer?.lineFragmentPadding = 0
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
@@ -238,6 +235,21 @@ struct BlockEditorView: NSViewRepresentable {
         tv.isGrammarCheckingEnabled = true
         tv.typingAttributes = Styles.baseAttributes
         tv.linkTextAttributes = [:]
+    }
+
+    private func configureTextContainer(_ container: NSTextContainer, for textView: NSTextView) {
+        container.lineFragmentPadding = 0
+        container.heightTracksTextView = false
+
+        if blockKind == .table {
+            container.widthTracksTextView = false
+            container.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                             height: CGFloat.greatestFiniteMagnitude)
+            textView.isHorizontallyResizable = true
+        } else {
+            container.widthTracksTextView = true
+            textView.isHorizontallyResizable = false
+        }
     }
 }
 

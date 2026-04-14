@@ -434,21 +434,14 @@ class EditorCoordinator: NSObject {
                 }
             }
 
-            // Center-pad separator cells: split the extra width equally left and right
+            // Pad separator cells from the right side only. Using left-side kern on the
+            // first dash shifts the first glyph visually and makes divider rows look skewed.
             if let si = separatorIndex, si < rows.count {
                 for (i, cell) in rows[si].cells.enumerated() where i < colCount {
-                    let total = maxWidths[i] - cell.length
-                    guard total > 0, cell.length > 0 else { continue }
-                    let leftPad  = total / 2
-                    let rightPad = total - leftPad
-                    if leftPad > 0 {
-                        let firstChar = NSRange(location: cell.location, length: 1)
-                        storage.addAttribute(.kern, value: CGFloat(leftPad) * charWidth as NSNumber, range: firstChar)
-                    }
-                    if rightPad > 0 {
-                        let lastChar = NSRange(location: NSMaxRange(cell) - 1, length: 1)
-                        storage.addAttribute(.kern, value: CGFloat(rightPad) * charWidth as NSNumber, range: lastChar)
-                    }
+                    let pad = maxWidths[i] - cell.length
+                    guard pad > 0, cell.length > 0 else { continue }
+                    let lastChar = NSRange(location: NSMaxRange(cell) - 1, length: 1)
+                    storage.addAttribute(.kern, value: CGFloat(pad) * charWidth as NSNumber, range: lastChar)
                 }
             }
 
