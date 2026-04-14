@@ -70,9 +70,14 @@ final class MarkdownLayoutManager: NSLayoutManager {
             }
         }
 
+        var drawnTableRanges: [NSRange] = []
         storage.enumerateAttribute(markdownTableRowKey, in: charRange, options: []) { val, rng, _ in
             guard val != nil else { return }
-            let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
+            let tableRange = self.expandedTableRange(in: storage, around: rng, key: markdownTableRowKey)
+            guard !drawnTableRanges.contains(where: { NSEqualRanges($0, tableRange) }) else { return }
+            drawnTableRanges.append(tableRange)
+
+            let gr = self.glyphRange(forCharacterRange: tableRange, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
 
             struct TableRowMetrics {
@@ -147,11 +152,12 @@ final class MarkdownLayoutManager: NSLayoutManager {
                 }
 
                 if let fillColor {
+                    let rowHeight = row.rect.height + (index == rows.count - 1 ? bottomInset : 0)
                     fillColor.setFill()
                     NSBezierPath(rect: NSRect(x: outerRect.minX,
                                               y: row.rect.minY,
                                               width: outerRect.width,
-                                              height: row.rect.height)).fill()
+                                              height: rowHeight)).fill()
                 }
             }
 
@@ -177,6 +183,28 @@ final class MarkdownLayoutManager: NSLayoutManager {
 
             NSGraphicsContext.restoreGraphicsState()
         }
+    }
+
+    nonisolated private func expandedTableRange(
+        in storage: NSTextStorage,
+        around range: NSRange,
+        key: NSAttributedString.Key
+    ) -> NSRange {
+        var start = range.location
+        while start > 0 {
+            let previousIndex = start - 1
+            guard previousIndex < storage.length,
+                  storage.attribute(key, at: previousIndex, effectiveRange: nil) != nil else { break }
+            start = previousIndex
+        }
+
+        var end = NSMaxRange(range)
+        while end < storage.length,
+              storage.attribute(key, at: end, effectiveRange: nil) != nil {
+            end += 1
+        }
+
+        return NSRange(location: start, length: end - start)
     }
 }
 
@@ -555,6 +583,7 @@ extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
         // Apply tables immediately so pipes/separator never flash as raw text while typing
         if textStorage.string.contains("|") { applyTables(to: full, storage: textStorage) }
         textStorage.endEditing()
+        textView?.needsDisplay = true
 
         fullScanWorkItem?.cancel()
         let item = DispatchWorkItem { [weak textStorage] in
