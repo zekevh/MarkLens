@@ -7,32 +7,15 @@ struct MainEditorShell: View {
     @State private var isRichEditorReady = false
 
     var body: some View {
-        Group {
-            if documentStore.selectedFileURL != nil {
-                if documentStore.isRawMode {
-                    RawTextEditorView(
-                        text: $documentStore.documentText,
-                        fileURL: documentStore.selectedFileURL,
-                        searchJumpRequest: editorUIStore.searchJumpRequest,
-                        onTextChange: { documentStore.saveCurrentFile(text: $0) }
-                    )
-                    .id(documentStore.selectedFileURL)
-                } else {
-                    NodeEditorView(
-                        text: $documentStore.documentText,
-                        searchText: editorUIStore.searchText,
-                        searchJumpRequest: editorUIStore.searchJumpRequest,
-                        fileURL: documentStore.selectedFileURL,
-                        onReadyStateChange: { isReady in
-                            isRichEditorReady = isReady
-                        },
-                        onTextChange: { documentStore.saveCurrentFile(text: $0) },
-                        onLinkClick: { documentStore.handleLinkClick($0) }
-                    )
-                    .id(documentStore.selectedFileURL)
-                }
-            } else {
-                EmptyEditorView()
+        HStack(spacing: 0) {
+            editorContent
+            if editorUIStore.isOutlinePanelVisible, documentStore.selectedFileURL != nil {
+                Divider()
+                OutlinePanelView(
+                    entries: editorUIStore.outlineEntries,
+                    onSelectEntry: { editorUIStore.jumpToOutlineEntry($0) }
+                )
+                .frame(minWidth: 160, idealWidth: 210, maxWidth: 280)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -67,6 +50,36 @@ struct MainEditorShell: View {
             if isRawMode {
                 isRichEditorReady = false
             }
+        }
+    }
+
+    @ViewBuilder
+    private var editorContent: some View {
+        if documentStore.selectedFileURL != nil {
+            if documentStore.isRawMode {
+                RawTextEditorView(
+                    text: $documentStore.documentText,
+                    fileURL: documentStore.selectedFileURL,
+                    searchJumpRequest: editorUIStore.searchJumpRequest,
+                    onTextChange: { documentStore.saveCurrentFile(text: $0) }
+                )
+                .id(documentStore.selectedFileURL)
+            } else {
+                NodeEditorView(
+                    text: $documentStore.documentText,
+                    searchText: editorUIStore.searchText,
+                    searchJumpRequest: editorUIStore.searchJumpRequest,
+                    fileURL: documentStore.selectedFileURL,
+                    onReadyStateChange: { isReady in
+                        isRichEditorReady = isReady
+                    },
+                    onTextChange: { documentStore.saveCurrentFile(text: $0) },
+                    onLinkClick: { documentStore.handleLinkClick($0) }
+                )
+                .id(documentStore.selectedFileURL)
+            }
+        } else {
+            EmptyEditorView()
         }
     }
 }

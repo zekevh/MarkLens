@@ -181,6 +181,11 @@ private struct AppCommands: Commands {
                 .keyboardShortcut("f", modifiers: [.command, .option])
         }
         CommandGroup(after: .toolbar) {
+            Button((activeState?.editorUIStore.isOutlinePanelVisible ?? false) ? "Hide Outline" : "Show Outline") {
+                activeState?.editorUIStore.isOutlinePanelVisible.toggle()
+            }
+            .keyboardShortcut("o", modifiers: [.command, .control])
+
             Button((activeState?.editorUIStore.isPathBarVisible ?? true) ? "Hide Path Bar" : "Show Path Bar") {
                 activeState?.editorUIStore.isPathBarVisible.toggle()
             }
