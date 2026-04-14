@@ -2,6 +2,13 @@ import SwiftUI
 import Combine
 import AppKit
 
+struct DocumentSearchJumpRequest: Equatable {
+    let id: UUID
+    let fileURL: URL
+    let query: String
+    let location: Int
+}
+
 @MainActor
 final class EditorUIStore: ObservableObject {
     @Published var searchText: String = "" {
@@ -13,6 +20,7 @@ final class EditorUIStore: ObservableObject {
     @Published var isPathBarVisible: Bool = true
     @Published var isStatusBarVisible: Bool = true
     @Published private(set) var searchMatchCount: Int = 0
+    @Published private(set) var searchJumpRequest: DocumentSearchJumpRequest? = nil
 
     private let documentStore: DocumentStore
     private let search = DocumentSearch()
@@ -57,6 +65,24 @@ final class EditorUIStore: ObservableObject {
         let originalText = documentStore.documentText
         guard let updatedText = search.replaceAll(in: originalText, with: replaceText) else { return }
         applyReplaceResult(updatedText, originalText: originalText, actionName: "Replace All")
+    }
+
+    func openFileSearchResult(_ fileURL: URL, query: String, location: Int?) {
+        documentStore.loadFile(fileURL)
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchText = trimmedQuery
+
+        guard let location else {
+            searchJumpRequest = nil
+            return
+        }
+
+        searchJumpRequest = DocumentSearchJumpRequest(
+            id: UUID(),
+            fileURL: fileURL,
+            query: trimmedQuery,
+            location: max(0, location)
+        )
     }
 
     private func applyReplaceResult(_ updatedText: String, originalText: String, actionName: String) {

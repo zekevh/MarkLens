@@ -3,6 +3,8 @@ import AppKit
 
 struct RawTextEditorView: NSViewRepresentable {
     @Binding var text: String
+    var fileURL: URL?
+    var searchJumpRequest: DocumentSearchJumpRequest?
     var onTextChange: (String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -43,10 +45,13 @@ struct RawTextEditorView: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
         }
+        context.coordinator.parent = self
+        context.coordinator.applySearchJumpIfNeeded(to: textView)
     }
 
     class Coordinator: NSObject, NSTextViewDelegate {
         var parent: RawTextEditorView
+        private var handledJumpRequestID: UUID?
 
         init(_ parent: RawTextEditorView) {
             self.parent = parent
@@ -57,6 +62,19 @@ struct RawTextEditorView: NSViewRepresentable {
             let newText = textView.string
             parent.text = newText
             parent.onTextChange(newText)
+        }
+
+        func applySearchJumpIfNeeded(to textView: NSTextView) {
+            guard let request = parent.searchJumpRequest,
+                  request.fileURL == parent.fileURL,
+                  handledJumpRequestID != request.id else { return }
+
+            handledJumpRequestID = request.id
+            let length = (textView.string as NSString).length
+            let location = min(max(0, request.location), length)
+            textView.window?.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: location, length: 0))
+            scrollCursorToVisible(in: textView)
         }
     }
 }

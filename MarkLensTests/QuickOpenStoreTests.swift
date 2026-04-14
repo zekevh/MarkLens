@@ -6,6 +6,7 @@ final class QuickOpenStoreTests: XCTestCase {
     private var tempDirectoryURL: URL!
     private var documentStore: DocumentStore!
     private var workspaceStore: WorkspaceStore!
+    private var editorUIStore: EditorUIStore!
     private var quickOpenStore: QuickOpenStore!
 
     override func setUpWithError() throws {
@@ -15,12 +16,18 @@ final class QuickOpenStoreTests: XCTestCase {
 
         documentStore = DocumentStore()
         workspaceStore = WorkspaceStore(documentStore: documentStore)
-        quickOpenStore = QuickOpenStore(workspaceStore: workspaceStore)
+        editorUIStore = EditorUIStore(documentStore: documentStore)
+        quickOpenStore = QuickOpenStore(
+            workspaceStore: workspaceStore,
+            documentStore: documentStore,
+            editorUIStore: editorUIStore
+        )
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: tempDirectoryURL)
         quickOpenStore = nil
+        editorUIStore = nil
         workspaceStore = nil
         documentStore = nil
         tempDirectoryURL = nil
@@ -70,6 +77,42 @@ final class QuickOpenStoreTests: XCTestCase {
         XCTAssertEqual(quickOpenStore.results.first?.url, prefixURL)
     }
 
+    func testQueryFindsContentMatchesAndReturnsSnippet() throws {
+        let alphaURL = try makeFile(named: "Alpha.md", contents: "roadmap draft")
+        let betaURL = try makeFile(named: "Beta.md", contents: "target needle inside body text")
+
+        workspaceStore.rootFolderURL = tempDirectoryURL
+        workspaceStore.rootNodes = [
+            FileNode(url: alphaURL, name: alphaURL.lastPathComponent, isDirectory: false),
+            FileNode(url: betaURL, name: betaURL.lastPathComponent, isDirectory: false)
+        ]
+
+        quickOpenStore.show()
+        quickOpenStore.query = "needle"
+        waitForIndexedResults()
+
+        XCTAssertEqual(quickOpenStore.results.first?.url, betaURL)
+        XCTAssertEqual(quickOpenStore.results.first?.matchSource, .content)
+        XCTAssertTrue(quickOpenStore.results.first?.snippet?.contains("needle") == true)
+    }
+
+    func testQueryKeepsOneResultPerFileWhenTitleAndContentBothMatch() throws {
+        let matchingURL = try makeFile(named: "Needle Notes.md", contents: "needle in the body too")
+
+        workspaceStore.rootFolderURL = tempDirectoryURL
+        workspaceStore.rootNodes = [
+            FileNode(url: matchingURL, name: matchingURL.lastPathComponent, isDirectory: false)
+        ]
+
+        quickOpenStore.show()
+        quickOpenStore.query = "needle"
+        waitForIndexedResults()
+
+        XCTAssertEqual(quickOpenStore.results.count, 1)
+        XCTAssertEqual(quickOpenStore.results.first?.url, matchingURL)
+        XCTAssertNotNil(quickOpenStore.results.first?.snippet)
+    }
+
     func testOpenSelectionLoadsChosenFileIntoEditor() throws {
         let firstURL = try makeFile(named: "Alpha.md")
         let secondURL = try makeFile(named: "Beta.md")
@@ -92,9 +135,39 @@ final class QuickOpenStoreTests: XCTestCase {
         XCTAssertEqual(workspaceStore.selectedSidebarURLs, [secondURL])
     }
 
+    func testOpenSelectionFromContentMatchSetsEditorSearchState() throws {
+        let targetURL = try makeFile(named: "Gamma.md", contents: "prefix target needle suffix")
+
+        workspaceStore.rootFolderURL = tempDirectoryURL
+        workspaceStore.rootNodes = [
+            FileNode(url: targetURL, name: targetURL.lastPathComponent, isDirectory: false)
+        ]
+
+        quickOpenStore.show()
+        quickOpenStore.query = "needle"
+        waitForIndexedResults()
+        quickOpenStore.openSelection()
+
+        XCTAssertEqual(documentStore.selectedFileURL, targetURL)
+        XCTAssertEqual(editorUIStore.searchText, "needle")
+        XCTAssertEqual(editorUIStore.searchJumpRequest?.fileURL, targetURL)
+        XCTAssertNotNil(editorUIStore.searchJumpRequest)
+    }
+
     private func makeFile(named name: String, contents: String = "content") throws -> URL {
         let url = tempDirectoryURL.appendingPathComponent(name)
         try contents.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    private func waitForIndexedResults(timeout: TimeInterval = 1.0) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !quickOpenStore.results.isEmpty,
+               quickOpenStore.results.contains(where: { $0.matchSource == .content || $0.snippet != nil }) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
     }
 }

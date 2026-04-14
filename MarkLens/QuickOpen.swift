@@ -2,6 +2,12 @@ import SwiftUI
 import Combine
 import AppKit
 
+enum QuickOpenMatchSource: Hashable {
+    case title
+    case path
+    case content
+}
+
 struct QuickOpenResult: Identifiable, Hashable {
     let id: URL
     let url: URL
@@ -9,6 +15,50 @@ struct QuickOpenResult: Identifiable, Hashable {
     let subtitle: String
     let score: Int
     let order: Int
+    let matchSource: QuickOpenMatchSource
+    let snippet: String?
+    let matchLocation: Int?
+}
+
+private struct QuickOpenContentEntry {
+    let normalizedContent: String
+    let originalContent: String
+}
+
+private struct QuickOpenContentMatch {
+    let snippet: String
+    let location: Int
+    let score: Int
+}
+
+private enum QuickOpenContentIndex {
+    static func build(for files: [URL]) async -> [URL: QuickOpenContentEntry] {
+        await withTaskGroup(of: (URL, QuickOpenContentEntry?).self) { group in
+            for file in files {
+                group.addTask {
+                    guard let text = try? String(contentsOf: file, encoding: .utf8) else {
+                        return (file, nil)
+                    }
+
+                    return (
+                        file,
+                        QuickOpenContentEntry(
+                            normalizedContent: QuickOpenStore.normalize(text),
+                            originalContent: text
+                        )
+                    )
+                }
+            }
+
+            var entries: [URL: QuickOpenContentEntry] = [:]
+            for await (file, entry) in group {
+                if let entry {
+                    entries[file] = entry
+                }
+            }
+            return entries
+        }
+    }
 }
 
 @MainActor
@@ -21,20 +71,39 @@ final class QuickOpenStore: ObservableObject {
     @Published var selectedResultID: URL? = nil
 
     private let workspaceStore: WorkspaceStore
+    private let documentStore: DocumentStore
+    private let editorUIStore: EditorUIStore
     private var cancellables: Set<AnyCancellable> = []
+    private var contentIndex: [URL: QuickOpenContentEntry] = [:]
+    private var indexedFiles: [URL] = []
+    private var indexGeneration = 0
 
-    init(workspaceStore: WorkspaceStore) {
+    init(workspaceStore: WorkspaceStore, documentStore: DocumentStore, editorUIStore: EditorUIStore) {
         self.workspaceStore = workspaceStore
+        self.documentStore = documentStore
+        self.editorUIStore = editorUIStore
 
         workspaceStore.$rootNodes
             .sink { [weak self] _ in
-                self?.refreshResults()
+                self?.rebuildIndex()
             }
             .store(in: &cancellables)
 
         workspaceStore.$selectedSidebarURLs
             .sink { [weak self] _ in
                 self?.syncSelectionWithWorkspace()
+            }
+            .store(in: &cancellables)
+
+        documentStore.$documentText
+            .sink { [weak self] _ in
+                self?.refreshIndexForOpenDocumentIfNeeded()
+            }
+            .store(in: &cancellables)
+
+        documentStore.$selectedFileURL
+            .sink { [weak self] _ in
+                self?.refreshIndexForOpenDocumentIfNeeded()
             }
             .store(in: &cancellables)
     }
@@ -70,7 +139,16 @@ final class QuickOpenStore: ObservableObject {
 
     func openSelection() {
         guard let selectedResult else { return }
-        workspaceStore.loadFile(selectedResult.url)
+        workspaceStore.selectedSidebarURLs = [selectedResult.url]
+        if let matchLocation = selectedResult.matchLocation {
+            editorUIStore.openFileSearchResult(
+                selectedResult.url,
+                query: query,
+                location: matchLocation
+            )
+        } else {
+            workspaceStore.loadFile(selectedResult.url, syncSidebarSelection: false)
+        }
         hide()
     }
 
@@ -86,18 +164,23 @@ final class QuickOpenStore: ObservableObject {
         let nextResults = files.enumerated().compactMap { index, url -> QuickOpenResult? in
             let title = url.lastPathComponent
             let subtitle = Self.subtitle(for: url, rootFolderURL: workspaceStore.rootFolderURL)
-            guard let score = Self.scoreMatch(query: trimmedQuery, title: title, subtitle: subtitle, order: index) else {
-                return nil
-            }
-
-            return QuickOpenResult(
-                id: url,
+            let fileMatch = Self.scoreFileMatch(query: trimmedQuery, title: title, subtitle: subtitle, order: index)
+            let contentMatch = Self.contentMatch(
+                query: trimmedQuery,
+                entry: contentIndex[url] ?? Self.loadContentEntry(at: url)
+            )
+            guard let resolved = Self.resolveMatch(
+                fileMatch: fileMatch,
+                contentMatch: contentMatch,
                 url: url,
                 title: title,
                 subtitle: subtitle,
-                score: score,
                 order: index
-            )
+            ) else {
+                return nil
+            }
+
+            return resolved
         }
         .sorted { lhs, rhs in
             if lhs.score != rhs.score {
@@ -111,6 +194,36 @@ final class QuickOpenStore: ObservableObject {
 
         results = Array(nextResults.prefix(50))
         syncSelectionWithWorkspace()
+    }
+
+    private func rebuildIndex() {
+        let files = Self.flattenFiles(in: workspaceStore.rootNodes)
+        indexedFiles = files
+        refreshResults()
+
+        indexGeneration += 1
+        let generation = indexGeneration
+
+        Task {
+            let index = await QuickOpenContentIndex.build(for: files)
+            await MainActor.run {
+                guard self.indexGeneration == generation else { return }
+                self.contentIndex = index
+                self.refreshIndexForOpenDocumentIfNeeded()
+                self.refreshResults()
+            }
+        }
+    }
+
+    private func refreshIndexForOpenDocumentIfNeeded() {
+        guard let selectedFileURL = documentStore.selectedFileURL,
+              indexedFiles.contains(selectedFileURL) else { return }
+
+        contentIndex[selectedFileURL] = QuickOpenContentEntry(
+            normalizedContent: Self.normalize(documentStore.documentText),
+            originalContent: documentStore.documentText
+        )
+        refreshResults()
     }
 
     private func syncSelectionWithWorkspace() {
@@ -159,9 +272,9 @@ final class QuickOpenStore: ObservableObject {
             .replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
-    private static func scoreMatch(query: String, title: String, subtitle: String, order: Int) -> Int? {
+    private static func scoreFileMatch(query: String, title: String, subtitle: String, order: Int) -> (score: Int, source: QuickOpenMatchSource)? {
         guard !title.isEmpty else { return nil }
-        guard !query.isEmpty else { return 10_000 - order }
+        guard !query.isEmpty else { return (10_000 - order, .title) }
 
         let normalizedQuery = normalize(query)
         let normalizedTitle = normalize(title)
@@ -169,34 +282,138 @@ final class QuickOpenStore: ObservableObject {
         let titleStem = normalize((title as NSString).deletingPathExtension)
 
         var score = 0
+        var source: QuickOpenMatchSource = .title
 
         if normalizedTitle == normalizedQuery || titleStem == normalizedQuery {
             score += 3_000
+            source = .title
         }
         if normalizedTitle.hasPrefix(normalizedQuery) || titleStem.hasPrefix(normalizedQuery) {
             score += 2_000
+            source = .title
         }
         if normalizedTitle.contains(normalizedQuery) || titleStem.contains(normalizedQuery) {
             score += 1_200
+            source = .title
         }
         if normalizedPath.contains(normalizedQuery) {
             score += 700
+            if score < 1_200 {
+                source = .path
+            }
         }
 
         if let fuzzyTitle = fuzzyScore(query: normalizedQuery, candidate: titleStem) {
             score += 900 + fuzzyTitle
         } else if let fuzzyPath = fuzzyScore(query: normalizedQuery, candidate: normalizedPath) {
             score += 300 + fuzzyPath
+            if score < 1_200 {
+                source = .path
+            }
         }
 
         guard score > 0 else { return nil }
-        return score - min(order, 200)
+        return (score - min(order, 200), source)
     }
 
-    private static func normalize(_ value: String) -> String {
+    private static func resolveMatch(
+        fileMatch: (score: Int, source: QuickOpenMatchSource)?,
+        contentMatch: QuickOpenContentMatch?,
+        url: URL,
+        title: String,
+        subtitle: String,
+        order: Int
+    ) -> QuickOpenResult? {
+        if let fileMatch, let contentMatch {
+            let blendedScore = max(fileMatch.score, contentMatch.score) + min(fileMatch.score / 10, 150)
+            return QuickOpenResult(
+                id: url,
+                url: url,
+                title: title,
+                subtitle: subtitle,
+                score: blendedScore,
+                order: order,
+                matchSource: fileMatch.score >= contentMatch.score ? fileMatch.source : .content,
+                snippet: contentMatch.snippet,
+                matchLocation: contentMatch.location
+            )
+        }
+
+        if let fileMatch {
+            return QuickOpenResult(
+                id: url,
+                url: url,
+                title: title,
+                subtitle: subtitle,
+                score: fileMatch.score,
+                order: order,
+                matchSource: fileMatch.source,
+                snippet: nil,
+                matchLocation: nil
+            )
+        }
+
+        guard let contentMatch else { return nil }
+        return QuickOpenResult(
+            id: url,
+            url: url,
+            title: title,
+            subtitle: subtitle,
+            score: contentMatch.score,
+            order: order,
+            matchSource: .content,
+            snippet: contentMatch.snippet,
+            matchLocation: contentMatch.location
+        )
+    }
+
+    private static func contentMatch(query: String, entry: QuickOpenContentEntry?) -> QuickOpenContentMatch? {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty, let entry else { return nil }
+
+        let normalizedQuery = normalize(trimmedQuery)
+        guard let matchRange = entry.normalizedContent.range(of: normalizedQuery) else { return nil }
+
+        let location = entry.normalizedContent.distance(from: entry.normalizedContent.startIndex, to: matchRange.lowerBound)
+        let snippet = snippet(for: entry.originalContent, around: location, queryLength: normalizedQuery.count)
+        let lengthBonus = max(0, 160 - min(entry.originalContent.count, 160))
+        return QuickOpenContentMatch(
+            snippet: snippet,
+            location: location,
+            score: 820 + lengthBonus
+        )
+    }
+
+    private static func snippet(for content: String, around location: Int, queryLength: Int) -> String {
+        let nsContent = content as NSString
+        let length = nsContent.length
+        guard length > 0 else { return "" }
+
+        let safeLocation = min(max(0, location), max(0, length - 1))
+        let start = max(0, safeLocation - 36)
+        let end = min(length, safeLocation + max(queryLength, 1) + 44)
+        let range = NSRange(location: start, length: end - start)
+        let raw = nsContent.substring(with: range)
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = start > 0 ? "…" : ""
+        let suffix = end < length ? "…" : ""
+        return prefix + raw + suffix
+    }
+
+    nonisolated static func normalize(_ value: String) -> String {
         value
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
+    }
+
+    nonisolated private static func loadContentEntry(at url: URL) -> QuickOpenContentEntry? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return QuickOpenContentEntry(
+            normalizedContent: normalize(text),
+            originalContent: text
+        )
     }
 
     private static func fuzzyScore(query: String, candidate: String) -> Int? {
@@ -246,7 +463,7 @@ struct QuickOpenOverlay: View {
                             Image(systemName: "magnifyingglass")
                                 .foregroundStyle(.secondary)
 
-                            TextField("Search files", text: $quickOpenStore.query)
+                            TextField("Search files and text", text: $quickOpenStore.query)
                                 .textFieldStyle(.plain)
                                 .font(.title3)
                                 .focused($isSearchFieldFocused)
@@ -299,9 +516,9 @@ struct QuickOpenOverlay: View {
                                 }
                             } else {
                                 ContentUnavailableView(
-                                    "No Matching Files",
+                                    "No Matching Results",
                                     systemImage: "doc.text.magnifyingglass",
-                                    description: Text("Try a different filename or path fragment.")
+                                    description: Text("Try a different filename, path, or text fragment.")
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
@@ -399,6 +616,13 @@ private struct QuickOpenResultRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+
+            if let snippet = result.snippet {
+                Text(snippet)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)

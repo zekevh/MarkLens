@@ -37,7 +37,11 @@ final class AppState: ObservableObject {
     init() {
         workspaceStore = WorkspaceStore(documentStore: documentStore)
         editorUIStore = EditorUIStore(documentStore: documentStore)
-        quickOpenStore = QuickOpenStore(workspaceStore: workspaceStore)
+        quickOpenStore = QuickOpenStore(
+            workspaceStore: workspaceStore,
+            documentStore: documentStore,
+            editorUIStore: editorUIStore
+        )
     }
 
     func restoreLastSession() {

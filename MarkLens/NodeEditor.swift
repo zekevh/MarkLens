@@ -5,6 +5,7 @@ import AppKit
 struct NodeEditorView: View {
     @Binding var text: String
     var searchText: String
+    var searchJumpRequest: DocumentSearchJumpRequest?
     var fileURL: URL?
     var onTextChange: (String) -> Void
     var onLinkClick: ((String) -> Void)? = nil
@@ -13,6 +14,7 @@ struct NodeEditorView: View {
     @StateObject private var commandController = NodeEditorCommandController()
     @Environment(\.undoManager) private var undoManager
     @State private var dropTargetID: UUID? = nil
+    @State private var lastHandledSearchJumpID: UUID? = nil
 
     var body: some View {
         ScrollView {
@@ -133,6 +135,49 @@ struct NodeEditorView: View {
             let serialized = serializeMarkdownBlocks(manager.blocks)
             guard newText != serialized else { return }
             manager.load(from: newText)
+            applySearchJumpIfNeeded()
+        }
+        .onAppear { applySearchJumpIfNeeded() }
+        .onChange(of: searchJumpRequest?.id) { _, _ in
+            applySearchJumpIfNeeded()
+        }
+    }
+
+    private func applySearchJumpIfNeeded() {
+        guard let request = searchJumpRequest,
+              request.fileURL == fileURL,
+              lastHandledSearchJumpID != request.id else { return }
+
+        lastHandledSearchJumpID = request.id
+        focusSearchJump(at: request.location)
+    }
+
+    private func focusSearchJump(at absoluteLocation: Int) {
+        guard !manager.blocks.isEmpty else { return }
+
+        let clampedLocation = max(0, absoluteLocation)
+        var cursor = 0
+
+        for (index, block) in manager.blocks.enumerated() {
+            let blockLength = (block.content as NSString).length
+            if clampedLocation <= cursor + blockLength {
+                manager.registry.focus(block.id, at: .position(clampedLocation - cursor))
+                return
+            }
+
+            cursor += blockLength
+            if index < manager.blocks.count - 1 {
+                let separatorLength = 2
+                if clampedLocation < cursor + separatorLength {
+                    manager.registry.focus(block.id, at: .end)
+                    return
+                }
+                cursor += separatorLength
+            }
+        }
+
+        if let lastBlock = manager.blocks.last {
+            manager.registry.focus(lastBlock.id, at: .end)
         }
     }
 }

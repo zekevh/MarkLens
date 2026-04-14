@@ -11,6 +11,8 @@ struct MainEditorShell: View {
                 if documentStore.isRawMode {
                     RawTextEditorView(
                         text: $documentStore.documentText,
+                        fileURL: documentStore.selectedFileURL,
+                        searchJumpRequest: editorUIStore.searchJumpRequest,
                         onTextChange: { documentStore.saveCurrentFile(text: $0) }
                     )
                     .id(documentStore.selectedFileURL)
@@ -18,6 +20,7 @@ struct MainEditorShell: View {
                     NodeEditorView(
                         text: $documentStore.documentText,
                         searchText: editorUIStore.searchText,
+                        searchJumpRequest: editorUIStore.searchJumpRequest,
                         fileURL: documentStore.selectedFileURL,
                         onTextChange: { documentStore.saveCurrentFile(text: $0) },
                         onLinkClick: { documentStore.handleLinkClick($0) }
