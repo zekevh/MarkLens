@@ -15,7 +15,6 @@ final class AppStateSearchReplaceTests: XCTestCase {
         try "".write(to: fileURL, atomically: true, encoding: .utf8)
 
         appState = AppState()
-        appState.documentStore.selectedFileURL = fileURL
         appState.documentStore.errorMessage = nil
     }
 
@@ -34,7 +33,8 @@ final class AppStateSearchReplaceTests: XCTestCase {
     }
 
     func testReplaceNextReplacesOnlyFirstMatch() throws {
-        appState.documentStore.documentText = "Alpha beta alpha"
+        try "Alpha beta alpha".write(to: fileURL, atomically: true, encoding: .utf8)
+        appState.documentStore.loadFile(fileURL)
         appState.searchText = "alpha"
         appState.replaceText = "note"
 
@@ -46,7 +46,8 @@ final class AppStateSearchReplaceTests: XCTestCase {
     }
 
     func testReplaceAllReplacesEveryMatchAndPersistsToDisk() throws {
-        appState.documentStore.documentText = "Alpha beta ALPHA gamma alpha"
+        try "Alpha beta ALPHA gamma alpha".write(to: fileURL, atomically: true, encoding: .utf8)
+        appState.documentStore.loadFile(fileURL)
         appState.searchText = "alpha"
         appState.replaceText = "note"
 

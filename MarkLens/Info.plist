@@ -44,6 +44,8 @@
                 <string>md</string>
                 <string>markdown</string>
             </array>
+            <key>NSDocumentClass</key>
+            <string>$(PRODUCT_MODULE_NAME).MarkdownDocument</string>
         </dict>
     </array>
     <key>UTImportedTypeDeclarations</key>

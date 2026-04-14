@@ -227,6 +227,12 @@ private struct WindowView: View {
                 let shouldRestore = environment[UITestLaunchEnvironment.disableRestore] != "1"
                 if shouldRestore {
                     appState.restoreLastSession()
+                    // Show the welcome screen if there is nothing to restore.
+                    let hasFolder = appState.workspaceStore.rootFolderURL != nil
+                    let hasRecents = !appState.documentStore.recentURLs.isEmpty
+                    if !hasFolder && !hasRecents {
+                        openWindow(id: "welcome")
+                    }
                 }
                 if let rootFolderPath = environment[UITestLaunchEnvironment.rootFolder], !rootFolderPath.isEmpty {
                     let sourceURL = URL(fileURLWithPath: rootFolderPath, isDirectory: true)
@@ -374,9 +380,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         removeAppHotkeyMonitor()
-        // Flush pending debounced saves in every open window before quitting.
         windowStates.values.forEach { $0.flushPendingSave() }
         return .terminateNow
+    }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
     }
 
     func performNewFile() {
@@ -500,6 +509,13 @@ struct MarkLensApp: App {
         .commands {
             AppCommands()
         }
+
+        Window("Welcome to MarkLens", id: "welcome") {
+            WelcomeView()
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+        .defaultPosition(.center)
 
         Settings {
             SettingsView()

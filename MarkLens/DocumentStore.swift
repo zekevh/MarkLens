@@ -4,8 +4,6 @@ import Combine
 
 @MainActor
 final class DocumentStore: ObservableObject {
-    private static let autosaveDelay: TimeInterval = 1.0
-
     @Published var selectedFileURL: URL? = nil
     @Published var documentText: String = ""
     @Published var recentURLs: [URL] = []
@@ -13,31 +11,142 @@ final class DocumentStore: ObservableObject {
     @Published var externalEditConflict: ExternalEditConflict? = nil
     @Published var isRawMode: Bool = false
 
-    private var saveWorkItem: DispatchWorkItem?
-    private var lastWrittenText: String? = nil
-    private var pendingSaveText: String? = nil
-    private var scheduledSaveID: Int = 0
+    private var currentDocument: MarkdownDocument?
+
+    // Security-scoped bookmarks so sandboxed re-access to recents works across launches.
     private var recentBookmarks: [String: Data] = [:]
-    private let fileWatcher = FileWatcher()
-    private let recentDocumentsPersistence = RecentDocumentsPersistence()
-    private let saveQueue = DispatchQueue(label: "MarkLens.DocumentStore.SaveQueue", qos: .utility)
+    private let bookmarksKey = "documentStoreRecentBookmarks"
+
+    // MARK: - File I/O
 
     func loadFile(_ url: URL) {
         guard !url.hasDirectoryPath else { return }
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-        pendingSaveText = nil
+        closeCurrentDocument()
+
+        let doc: MarkdownDocument
         do {
-            documentText = try String(contentsOf: url, encoding: .utf8)
+            doc = try MarkdownDocument(contentsOf: url, ofType: "net.daringfireball.markdown")
         } catch {
             errorMessage = "Could not open \"\(url.lastPathComponent)\": \(error.localizedDescription)"
             return
         }
-        lastWrittenText = documentText
+
+        doc.onContentUpdated = { [weak self] newText in
+            self?.handleExternalContentUpdate(newText)
+        }
+
+        currentDocument = doc
+        documentText = doc.text
         selectedFileURL = url
-        fileWatcher.watch(url) { [weak self] in self?.reloadIfChangedOnDisk() }
-        recordRecent(url)
+
+        NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        storeBookmark(for: url)
+        syncRecentsFromSystem()
     }
+
+    /// Called by editors on every keystroke. Marks the document dirty;
+    /// NSDocument's autosaveInPlace handles the actual write to disk.
+    func saveCurrentFile(text: String) {
+        currentDocument?.update(text: text)
+        documentText = text
+    }
+
+    /// Synchronous flush called on app quit. With autosaveInPlace this is a
+    /// safety net for the rare case the autosave timer hasn't fired yet.
+    func flushPendingSave() {
+        guard let doc = currentDocument,
+              doc.isDocumentEdited,
+              let url = doc.fileURL else { return }
+        try? doc.writeSafely(
+            to: url,
+            ofType: "net.daringfireball.markdown",
+            for: .saveOperation
+        )
+    }
+
+    func closeDocument(shouldClearRecents: Bool = false) {
+        closeCurrentDocument()
+        selectedFileURL = nil
+        documentText = ""
+        externalEditConflict = nil
+        if shouldClearRecents {
+            clearRecents()
+        }
+    }
+
+    func clearSelectionIfSelectedFileMatches(_ url: URL) {
+        guard selectedFileURL == url else { return }
+        selectedFileURL = nil
+        documentText = ""
+    }
+
+    // MARK: - Recent Documents
+
+    func restoreRecents() {
+        loadStoredBookmarks()
+        syncRecentsFromSystem()
+    }
+
+    func recordRecent(_ url: URL) {
+        NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        storeBookmark(for: url)
+        syncRecentsFromSystem()
+    }
+
+    func openRecent(_ url: URL) {
+        // Prefer a stored security-scoped bookmark for sandbox access.
+        if let bookmarkData = recentBookmarks[url.path] {
+            var isStale = false
+            if let scopedURL = try? URL(
+                resolvingBookmarkData: bookmarkData,
+                options: .withSecurityScope,
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            ), scopedURL.startAccessingSecurityScopedResource() {
+                if isStale { storeBookmark(for: scopedURL) }
+                loadFile(scopedURL)
+                return
+            }
+        }
+        // Fallback: direct read (works outside sandbox or for accessible paths).
+        if FileManager.default.isReadableFile(atPath: url.path) {
+            loadFile(url)
+        } else {
+            errorMessage = "Cannot access \"\(url.lastPathComponent)\" — please open it via File > Open."
+            removeRecent(url)
+        }
+    }
+
+    func hasRecent(_ url: URL) -> Bool {
+        recentURLs.contains(where: { $0.path == url.path })
+    }
+
+    func removeRecent(_ url: URL) {
+        recentURLs.removeAll { $0.path == url.path }
+        recentBookmarks.removeValue(forKey: url.path)
+        persistBookmarks()
+    }
+
+    func clearRecents() {
+        NSDocumentController.shared.clearRecentDocuments(nil)
+        recentURLs = []
+        recentBookmarks = [:]
+        UserDefaults.standard.removeObject(forKey: bookmarksKey)
+    }
+
+    // MARK: - Conflict Resolution
+
+    func resolveConflict(keepMine: Bool) {
+        guard let conflict = externalEditConflict else { return }
+        externalEditConflict = nil
+        if !keepMine {
+            documentText = conflict.diskContent
+            currentDocument?.update(text: conflict.diskContent)
+        }
+        // If keepMine: the next autosave will overwrite the disk version with our text.
+    }
+
+    // MARK: - Link Navigation
 
     func handleLinkClick(_ urlString: String) {
         if let url = URL(string: urlString),
@@ -55,52 +164,16 @@ final class DocumentStore: ObservableObject {
         loadFile(resolvedURL)
     }
 
-    func clearRecents() {
-        recentURLs = []
-        recentBookmarks = [:]
-        recentDocumentsPersistence.clear()
-    }
-
-    func openRecent(_ url: URL) {
-        guard recentBookmarks[url.path] != nil else {
-            errorMessage = "Cannot access \"\(url.lastPathComponent)\" — please open it via File > Open."
-            removeRecent(url)
-            return
-        }
-
-        do {
-            let scopedURL = try recentDocumentsPersistence.resolveRecentURL(url, bookmarks: &recentBookmarks)
-            loadFile(scopedURL)
-        } catch {
-            errorMessage = "Cannot access \"\(url.lastPathComponent)\": \(error.localizedDescription)"
-        }
-    }
-
-    func restoreRecents() {
-        let state = recentDocumentsPersistence.restore()
-        recentURLs = state.recentURLs
-        recentBookmarks = state.bookmarks
-    }
-
-    func resolveConflict(keepMine: Bool) {
-        guard let conflict = externalEditConflict else { return }
-        externalEditConflict = nil
-        if !keepMine {
-            documentText = conflict.diskContent
-            lastWrittenText = conflict.diskContent
-            pendingSaveText = nil
-            saveWorkItem?.cancel()
-            saveWorkItem = nil
-        }
-    }
+    // MARK: - Testing Support
 
     func simulateExternalConflict(unsavedText: String, diskText: String) {
         guard let url = selectedFileURL else { return }
         documentText = unsavedText
+        currentDocument?.update(text: unsavedText)
         do {
             try diskText.write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            present(error, context: "Could not simulate external edit for \"\(url.lastPathComponent)\"")
+            errorMessage = "Could not simulate external edit for \"\(url.lastPathComponent)\""
             return
         }
         externalEditConflict = ExternalEditConflict(
@@ -109,113 +182,53 @@ final class DocumentStore: ObservableObject {
         )
     }
 
-    func saveCurrentFile(text: String) {
-        guard let url = selectedFileURL else { return }
-        guard FileManager.default.isWritableFile(atPath: url.path) else {
-            errorMessage = "Cannot save \"\(url.lastPathComponent)\": file is read-only."
-            return
-        }
-        saveWorkItem?.cancel()
-        pendingSaveText = text
-        scheduledSaveID += 1
-        let saveID = scheduledSaveID
-        let item = DispatchWorkItem { [weak self] in
-            self?.saveQueue.async { [weak self] in
-                do {
-                    try text.write(to: url, atomically: true, encoding: .utf8)
-                    DispatchQueue.main.async {
-                        guard let self else { return }
-                        self.lastWrittenText = text
-                        if self.scheduledSaveID == saveID {
-                            self.pendingSaveText = nil
-                            self.saveWorkItem = nil
-                        }
-                    }
-                } catch {
-                DispatchQueue.main.async {
-                        guard let self else { return }
-                        if self.scheduledSaveID == saveID {
-                            self.saveWorkItem = nil
-                        }
-                        self.present(error, context: "Could not save \"\(url.lastPathComponent)\"")
-                    }
-                }
-            }
-        }
-        saveWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.autosaveDelay, execute: item)
-    }
+    // MARK: - Internals
 
-    func flushPendingSave() {
-        guard let url = selectedFileURL,
-              let pendingSaveText else {
-            saveWorkItem?.cancel()
-            saveWorkItem = nil
-            return
-        }
-        saveWorkItem?.cancel()
-        saveWorkItem = nil
-        do {
-            try saveQueue.sync {
-                try pendingSaveText.write(to: url, atomically: true, encoding: .utf8)
-            }
-            lastWrittenText = pendingSaveText
-            self.pendingSaveText = nil
-        } catch {
-            present(error, context: "Could not save \"\(url.lastPathComponent)\"")
-        }
-    }
-
-    func closeDocument(shouldClearRecents: Bool = false) {
-        flushPendingSave()
-        fileWatcher.stop()
-        selectedFileURL = nil
-        documentText = ""
-        lastWrittenText = nil
-        pendingSaveText = nil
-        externalEditConflict = nil
-        if shouldClearRecents {
-            clearRecents()
-        }
-    }
-
-    func clearSelectionIfSelectedFileMatches(_ url: URL) {
-        guard selectedFileURL == url else { return }
-        selectedFileURL = nil
-        documentText = ""
-    }
-
-    func hasRecent(_ url: URL) -> Bool {
-        recentURLs.contains(where: { $0.path == url.path })
-    }
-
-    func removeRecent(_ url: URL) {
-        recentDocumentsPersistence.remove(url, recentURLs: &recentURLs, bookmarks: &recentBookmarks)
-    }
-
-    func recordRecent(_ url: URL) {
-        recentDocumentsPersistence.record(url, recentURLs: &recentURLs, bookmarks: &recentBookmarks)
-    }
-
-    private func reloadIfChangedOnDisk() {
-        guard let url = selectedFileURL else { return }
-        guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
-        guard onDisk != documentText else { return }
-        guard onDisk != lastWrittenText else { return }
-
-        if documentText == lastWrittenText {
-            documentText = onDisk
-            lastWrittenText = onDisk
-            pendingSaveText = nil
-        } else {
-            externalEditConflict = ExternalEditConflict(
-                diskContent: onDisk,
-                fileName: url.lastPathComponent
+    private func closeCurrentDocument() {
+        guard let doc = currentDocument else { return }
+        if doc.isDocumentEdited, let url = doc.fileURL {
+            try? doc.writeSafely(
+                to: url,
+                ofType: "net.daringfireball.markdown",
+                for: .saveOperation
             )
         }
+        doc.onContentUpdated = nil
+        doc.close()
+        currentDocument = nil
     }
 
-    private func present(_ error: Error, context: String) {
-        errorMessage = "\(context): \(error.localizedDescription)"
+    private func handleExternalContentUpdate(_ newText: String) {
+        guard newText != documentText else { return }
+        if currentDocument?.isDocumentEdited == true {
+            externalEditConflict = ExternalEditConflict(
+                diskContent: newText,
+                fileName: selectedFileURL?.lastPathComponent ?? ""
+            )
+        } else {
+            documentText = newText
+        }
+    }
+
+    private func syncRecentsFromSystem() {
+        recentURLs = NSDocumentController.shared.recentDocumentURLs
+    }
+
+    private func storeBookmark(for url: URL) {
+        guard let data = try? url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) else { return }
+        recentBookmarks[url.path] = data
+        persistBookmarks()
+    }
+
+    private func persistBookmarks() {
+        UserDefaults.standard.set(recentBookmarks, forKey: bookmarksKey)
+    }
+
+    private func loadStoredBookmarks() {
+        recentBookmarks = (UserDefaults.standard.dictionary(forKey: bookmarksKey) as? [String: Data]) ?? [:]
     }
 }
