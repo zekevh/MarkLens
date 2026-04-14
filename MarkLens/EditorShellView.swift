@@ -1,21 +1,25 @@
 import SwiftUI
+import AppKit
 
 struct MainEditorShell: View {
     @EnvironmentObject var documentStore: DocumentStore
     @EnvironmentObject var workspaceStore: WorkspaceStore
     @EnvironmentObject var editorUIStore: EditorUIStore
     @State private var isRichEditorReady = false
+    @AppStorage("outlinePanelWidth") private var outlinePanelWidth: Double = 180
 
     var body: some View {
         HStack(spacing: 0) {
             editorContent
+
             if editorUIStore.isOutlinePanelVisible, documentStore.selectedFileURL != nil {
-                Divider()
+                OutlineDivider(panelWidth: $outlinePanelWidth)
+
                 OutlinePanelView(
                     entries: editorUIStore.outlineEntries,
                     onSelectEntry: { editorUIStore.jumpToOutlineEntry($0) }
                 )
-                .frame(minWidth: 160, idealWidth: 210, maxWidth: 280)
+                .frame(width: CGFloat(outlinePanelWidth))
             }
         }
         .overlay(alignment: .topLeading) {
@@ -81,5 +85,43 @@ struct MainEditorShell: View {
         } else {
             EmptyEditorView()
         }
+    }
+}
+
+// MARK: - Resize Handle
+
+private struct OutlineDivider: View {
+    @Binding var panelWidth: Double
+    /// Width captured at the start of each drag gesture; nil when not dragging.
+    @State private var baseWidth: Double? = nil
+
+    private let minWidth: Double = 140
+    private let maxWidth: Double = 360
+
+    var body: some View {
+        Color(nsColor: .separatorColor)
+            .frame(width: 1)
+            // Widen the hit area without changing the visual width
+            .contentShape(Rectangle().inset(by: -3))
+            .onHover { hovering in
+                if hovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        // Capture the width once at the start of each drag.
+                        let base = baseWidth ?? { baseWidth = panelWidth; return panelWidth }()
+                        panelWidth = clamp(base - value.translation.width)
+                    }
+                    .onEnded { value in
+                        let base = baseWidth ?? panelWidth
+                        panelWidth = clamp(base - value.translation.width)
+                        baseWidth = nil
+                    }
+            )
+    }
+
+    private func clamp(_ value: Double) -> Double {
+        max(minWidth, min(value, maxWidth))
     }
 }
