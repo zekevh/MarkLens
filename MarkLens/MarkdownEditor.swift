@@ -70,60 +70,112 @@ final class MarkdownLayoutManager: NSLayoutManager {
             }
         }
 
-        // Draw vertical column dividers at each hidden | character
-        storage.enumerateAttribute(markdownTablePipeKey, in: charRange, options: []) { val, rng, _ in
-            guard val != nil else { return }
-            let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
-            guard gr.length > 0 else { return }
-            let lineRect = self.lineFragmentRect(forGlyphAt: gr.location, effectiveRange: nil)
-                               .offsetBy(dx: origin.x, dy: origin.y)
-            let glyphOff = self.location(forGlyphAt: gr.location)
-            let x = floor(lineRect.minX + glyphOff.x) + 0.5
-            let path = NSBezierPath()
-            path.move(to: NSPoint(x: x, y: lineRect.minY))
-            path.line(to: NSPoint(x: x, y: lineRect.maxY))
-            path.lineWidth = 0.5
-            NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
-            path.stroke()
-        }
-
-        // Draw horizontal borders for each table row, bounded by the outer pipes.
-        // Top border only on the first row; all rows get a bottom border — avoids
-        // drawing two lines between adjacent rows.
         storage.enumerateAttribute(markdownTableRowKey, in: charRange, options: []) { val, rng, _ in
             guard val != nil else { return }
             let gr = self.glyphRange(forCharacterRange: rng, actualCharacterRange: nil)
             guard gr.length > 0 else { return }
+
+            struct TableRowMetrics {
+                let rect: NSRect
+                let minX: CGFloat
+                let maxX: CGFloat
+                let innerDividers: [CGFloat]
+            }
+
+            let outerBorderColor = NSColor.labelColor.withAlphaComponent(0.08)
+            let innerDividerColor = NSColor.separatorColor.withAlphaComponent(0.14)
+            let tableFillColor = NSColor.controlBackgroundColor.withAlphaComponent(0.52)
+            let alternateRowColor = NSColor.white.withAlphaComponent(0.035)
+            let headerRowColor = NSColor.white.withAlphaComponent(0.05)
+
+            var rows: [TableRowMetrics] = []
             var glyphPos = gr.location
-            var isFirstRow = true
             while glyphPos < NSMaxRange(gr) {
                 var lineGlyphRange = NSRange()
                 let lineRect = self.lineFragmentRect(forGlyphAt: glyphPos, effectiveRange: &lineGlyphRange)
                                    .offsetBy(dx: origin.x, dy: origin.y)
                 let lcr = self.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
-                var minX: CGFloat = .infinity, maxX: CGFloat = -.infinity
+                var pipeXs: [CGFloat] = []
                 storage.enumerateAttribute(markdownTablePipeKey, in: lcr, options: []) { pv, pr, _ in
                     guard pv != nil else { return }
                     let pgr = self.glyphRange(forCharacterRange: pr, actualCharacterRange: nil)
                     guard pgr.length > 0 else { return }
                     let px = floor(lineRect.minX + self.location(forGlyphAt: pgr.location).x) + 0.5
-                    if px < minX { minX = px }
-                    if px > maxX { maxX = px }
+                    pipeXs.append(px)
                 }
-                if minX != .infinity {
-                    NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
-                    var ys: [CGFloat] = [floor(lineRect.maxY) - 0.5]
-                    if isFirstRow { ys.insert(floor(lineRect.minY) + 0.5, at: 0) }
-                    for y in ys {
-                        let p = NSBezierPath(); p.lineWidth = 0.5
-                        p.move(to: NSPoint(x: minX, y: y))
-                        p.line(to: NSPoint(x: maxX, y: y))
-                        p.stroke()
-                    }
-                    isFirstRow = false
+                if let minX = pipeXs.min(), let maxX = pipeXs.max(), maxX > minX {
+                    let innerDividers = Array(pipeXs.sorted().dropFirst().dropLast())
+                    rows.append(TableRowMetrics(rect: lineRect,
+                                                minX: minX,
+                                                maxX: maxX,
+                                                innerDividers: innerDividers))
                 }
                 glyphPos = NSMaxRange(lineGlyphRange)
             }
+
+            guard let firstRow = rows.first, let lastRow = rows.last else { return }
+
+            let minX = rows.map(\.minX).min() ?? firstRow.minX
+            let maxX = rows.map(\.maxX).max() ?? firstRow.maxX
+            let bottomInset: CGFloat = 6
+            let outerRect = NSRect(x: minX,
+                                   y: firstRow.rect.minY,
+                                   width: maxX - minX,
+                                   height: (lastRow.rect.maxY - firstRow.rect.minY) + bottomInset)
+                .insetBy(dx: 0.5, dy: 0.5)
+            guard outerRect.width > 1, outerRect.height > 1 else { return }
+
+            let outerPath = NSBezierPath(roundedRect: outerRect, xRadius: 9, yRadius: 9)
+            tableFillColor.setFill()
+            outerPath.fill()
+
+            outerBorderColor.setStroke()
+            outerPath.lineWidth = 1
+            outerPath.stroke()
+
+            NSGraphicsContext.saveGraphicsState()
+            outerPath.addClip()
+
+            for (index, row) in rows.enumerated() {
+                let fillColor: NSColor?
+                if index == 0 {
+                    fillColor = headerRowColor
+                } else if index.isMultiple(of: 2) {
+                    fillColor = alternateRowColor
+                } else {
+                    fillColor = nil
+                }
+
+                if let fillColor {
+                    fillColor.setFill()
+                    NSBezierPath(rect: NSRect(x: outerRect.minX,
+                                              y: row.rect.minY,
+                                              width: outerRect.width,
+                                              height: row.rect.height)).fill()
+                }
+            }
+
+            innerDividerColor.setStroke()
+
+            let uniqueDividerXs = Array(Set(rows.flatMap(\.innerDividers))).sorted()
+            for x in uniqueDividerXs {
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: x, y: outerRect.minY))
+                path.line(to: NSPoint(x: x, y: outerRect.maxY))
+                path.lineWidth = 0.5
+                path.stroke()
+            }
+
+            for row in rows.dropLast() {
+                let y = floor(row.rect.maxY) - 0.5
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: outerRect.minX, y: y))
+                path.line(to: NSPoint(x: outerRect.maxX, y: y))
+                path.lineWidth = 0.5
+                path.stroke()
+            }
+
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
 }
@@ -423,11 +475,13 @@ class EditorCoordinator: NSObject {
                     maxWidths[i] = max(maxWidths[i], cell.length)
                 }
             }
+            let horizontalPaddingUnits = 2
+            let targetWidths = maxWidths.map { $0 + horizontalPaddingUnits }
 
             // Right-pad content rows so columns align
             for row in contentRows {
                 for (i, cell) in row.cells.enumerated() where i < colCount {
-                    let pad = maxWidths[i] - cell.length
+                    let pad = targetWidths[i] - cell.length
                     guard pad > 0, cell.length > 0 else { continue }
                     let lastChar = NSRange(location: NSMaxRange(cell) - 1, length: 1)
                     storage.addAttribute(.kern, value: CGFloat(pad) * charWidth as NSNumber, range: lastChar)
@@ -438,7 +492,7 @@ class EditorCoordinator: NSObject {
             // first dash shifts the first glyph visually and makes divider rows look skewed.
             if let si = separatorIndex, si < rows.count {
                 for (i, cell) in rows[si].cells.enumerated() where i < colCount {
-                    let pad = maxWidths[i] - cell.length
+                    let pad = targetWidths[i] - cell.length
                     guard pad > 0, cell.length > 0 else { continue }
                     let lastChar = NSRange(location: NSMaxRange(cell) - 1, length: 1)
                     storage.addAttribute(.kern, value: CGFloat(pad) * charWidth as NSNumber, range: lastChar)
@@ -447,9 +501,10 @@ class EditorCoordinator: NSObject {
 
             // Uniform paragraph spacing for all rows (prevents last-row spacing drift)
             let tablePS = NSMutableParagraphStyle()
+            tablePS.minimumLineHeight = ceil(font.ascender - font.descender + 8)
             tablePS.paragraphSpacing     = 4
             tablePS.paragraphSpacingBefore = 0
-            tablePS.lineSpacing          = 0
+            tablePS.lineSpacing          = 2
             for row in rows {
                 storage.addAttribute(.paragraphStyle, value: tablePS, range: row.lineRange)
             }

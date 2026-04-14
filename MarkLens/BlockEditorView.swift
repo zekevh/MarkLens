@@ -554,6 +554,8 @@ final class BlockNSTextView: NSTextView {
 
 @MainActor
 final class BlockEditorCoordinator: NSObject {
+    private static let tableVisualBottomInset: CGFloat = 6
+
     private let highlighter: EditorCoordinator
     private let blockKind: MarkdownBlockKind
     private var lastReportedHeight: CGFloat = 24
@@ -613,7 +615,8 @@ final class BlockEditorCoordinator: NSObject {
         guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
         let rect = lm.usedRect(for: tc)
         let inset = textView.textContainerInset
-        let newHeight = max(ceil(rect.height) + inset.height * 2, 24)
+        let extraHeight = blockKind == .table ? Self.tableVisualBottomInset : 0
+        let newHeight = max(ceil(rect.height) + inset.height * 2 + extraHeight, 24)
         guard abs(newHeight - lastReportedHeight) > 0.5 else { return }
         lastReportedHeight = newHeight
 
