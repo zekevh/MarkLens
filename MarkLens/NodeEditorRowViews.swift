@@ -183,6 +183,15 @@ struct BlockRowView: View {
         }
         .padding(.top, index == 0 ? 0 : blockPadding.top)
         .padding(.bottom, blockPadding.bottom)
+        .onAppear {
+            reportInitialLayoutIfNeeded()
+        }
+        .onChange(of: isFrontMatterExpanded) { _, _ in
+            reportInitialLayoutIfNeeded()
+        }
+        .onChange(of: isHTMLEditing) { _, _ in
+            reportInitialLayoutIfNeeded()
+        }
     }
 
     private var editorView: some View {
@@ -230,6 +239,19 @@ struct BlockRowView: View {
         if block.kind == .frontMatter && !isFrontMatterExpanded { return 28 }
         if htmlSource != nil && !isHTMLEditing { return 0 }
         return max(height, 24)
+    }
+
+    private var waitsForEditorMeasurement: Bool {
+        if block.kind == .frontMatter && !isFrontMatterExpanded { return false }
+        if htmlSource != nil && !isHTMLEditing { return false }
+        return true
+    }
+
+    private func reportInitialLayoutIfNeeded() {
+        guard !hasReportedInitialLayout else { return }
+        guard !waitsForEditorMeasurement else { return }
+        hasReportedInitialLayout = true
+        onInitialLayout()
     }
 }
 

@@ -4,6 +4,7 @@ struct MainEditorShell: View {
     @EnvironmentObject var documentStore: DocumentStore
     @EnvironmentObject var workspaceStore: WorkspaceStore
     @EnvironmentObject var editorUIStore: EditorUIStore
+    @State private var isRichEditorReady = false
 
     var body: some View {
         Group {
@@ -22,6 +23,9 @@ struct MainEditorShell: View {
                         searchText: editorUIStore.searchText,
                         searchJumpRequest: editorUIStore.searchJumpRequest,
                         fileURL: documentStore.selectedFileURL,
+                        onReadyStateChange: { isReady in
+                            isRichEditorReady = isReady
+                        },
                         onTextChange: { documentStore.saveCurrentFile(text: $0) },
                         onLinkClick: { documentStore.handleLinkClick($0) }
                     )
@@ -29,6 +33,14 @@ struct MainEditorShell: View {
                 }
             } else {
                 EmptyEditorView()
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if documentStore.selectedFileURL != nil, !documentStore.isRawMode {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityIdentifier(isRichEditorReady ? "nodeEditorReady" : "nodeEditorLoading")
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -46,6 +58,14 @@ struct MainEditorShell: View {
                     showsPathBar: editorUIStore.isPathBarVisible,
                     showsStatusBar: editorUIStore.isStatusBarVisible
                 )
+            }
+        }
+        .onChange(of: documentStore.selectedFileURL) { _, _ in
+            isRichEditorReady = false
+        }
+        .onChange(of: documentStore.isRawMode) { _, isRawMode in
+            if isRawMode {
+                isRichEditorReady = false
             }
         }
     }

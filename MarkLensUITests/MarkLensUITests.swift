@@ -1,7 +1,9 @@
 import XCTest
+import AppKit
 
 @MainActor
 final class MarkLensUITests: XCTestCase {
+    private let clock = ContinuousClock()
     private let disableRestoreKey = "MARKLENS_UI_TEST_DISABLE_RESTORE"
     private let rootFolderKey = "MARKLENS_UI_TEST_ROOT_FOLDER"
     private let rawModeKey = "MARKLENS_UI_TEST_RAW_MODE"
@@ -110,18 +112,104 @@ final class MarkLensUITests: XCTestCase {
         XCTAssertEqual(rawEditor(in: app).value as? String, "Disk version from test")
     }
 
+    func testColdLaunchBenchmark_rawEditorFirstNote() throws {
+        try makeBenchmarkFixture()
+        let app = XCUIApplication()
+        configureLaunchEnvironment(for: app, rootFolder: tempDirectoryURL, rawMode: true)
+
+        let start = clock.now
+        app.launch()
+        XCTAssertTrue(rawEditor(in: app).waitForExistence(timeout: 5))
+        let elapsed = start.duration(to: clock.now)
+        print("BENCHMARK\tui_cold_launch_raw_editor_first_note\tms=\(formatMilliseconds(elapsed))")
+    }
+
+    func testColdLaunchBenchmark_richEditorFirstNote() throws {
+        try makeBenchmarkFixture()
+        let app = XCUIApplication()
+        configureLaunchEnvironment(for: app, rootFolder: tempDirectoryURL, rawMode: false)
+
+        let start = clock.now
+        app.launch()
+        XCTAssertTrue(richEditorReady(in: app).waitForExistence(timeout: 5))
+        let elapsed = start.duration(to: clock.now)
+        print("BENCHMARK\tui_cold_launch_rich_editor_first_note\tms=\(formatMilliseconds(elapsed))")
+    }
+
     private func launchApp(rootFolder: URL) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment[disableRestoreKey] = "1"
-        app.launchEnvironment[rootFolderKey] = rootFolder.path
-        app.launchEnvironment[rawModeKey] = "1"
-        app.launchEnvironment[harnessKey] = "1"
+        configureLaunchEnvironment(for: app, rootFolder: rootFolder, rawMode: true)
         app.launch()
         return app
+    }
+
+    private func configureLaunchEnvironment(for app: XCUIApplication, rootFolder: URL, rawMode: Bool) {
+        terminateRunningMarkLensApps()
+        app.launchEnvironment[disableRestoreKey] = "1"
+        app.launchEnvironment[rootFolderKey] = rootFolder.path
+        if rawMode {
+            app.launchEnvironment[rawModeKey] = "1"
+        } else {
+            app.launchEnvironment.removeValue(forKey: rawModeKey)
+        }
+        app.launchEnvironment[harnessKey] = "1"
     }
 
     private func rawEditor(in app: XCUIApplication) -> XCUIElement {
         app.textViews["rawTextEditor"]
     }
 
+    private func richEditorReady(in app: XCUIApplication) -> XCUIElement {
+        app.otherElements["nodeEditorReady"]
+    }
+
+    private func terminateRunningMarkLensApps() {
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: "io.zvh.marklens")
+        for app in runningApps {
+            if !app.terminate() {
+                app.forceTerminate()
+            }
+        }
+    }
+
+    private func makeBenchmarkFixture() throws {
+        try """
+        ---
+        title: Launch Benchmark
+        tags:
+          - perf
+        ---
+
+        # Launch Benchmark
+
+        This fixture tries to exercise headings, paragraphs, code, and tables.
+
+        ## Section Two
+
+        - [ ] first item
+        - [x] second item
+
+        ```swift
+        let values = [1, 2, 3]
+        print(values.reduce(0, +))
+        ```
+
+        | Name | Value |
+        | --- | --- |
+        | Alpha | 1 |
+        | Beta | 2 |
+
+        Final paragraph to force another block and some inline `code`.
+        """.write(
+            to: tempDirectoryURL.appendingPathComponent("Alpha.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func formatMilliseconds(_ duration: Duration) -> String {
+        let ms = Double(duration.components.seconds) * 1_000
+            + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+        return String(format: "%.3f", ms)
+    }
 }

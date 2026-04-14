@@ -7,6 +7,7 @@ struct NodeEditorView: View {
     var searchText: String
     var searchJumpRequest: DocumentSearchJumpRequest?
     var fileURL: URL?
+    var onReadyStateChange: (Bool) -> Void = { _ in }
     var onTextChange: (String) -> Void
     var onLinkClick: ((String) -> Void)? = nil
 
@@ -151,16 +152,21 @@ struct NodeEditorView: View {
             applySearchJumpIfNeeded()
         }
         .animation(.easeOut(duration: 0.18), value: isEditorReady)
+        .onChange(of: isEditorReady) { _, isReady in
+            onReadyStateChange(isReady)
+        }
     }
 
     private func loadEditorText(_ newText: String) {
         isEditorReady = false
+        onReadyStateChange(false)
         manager.load(from: newText)
         let blockIDs = Set(manager.blocks.map(\.id))
         pendingInitialLayoutIDs = blockIDs
 
         if blockIDs.isEmpty {
             isEditorReady = true
+            onReadyStateChange(true)
             return
         }
 
@@ -177,6 +183,7 @@ struct NodeEditorView: View {
         pendingInitialLayoutIDs.remove(blockID)
         if pendingInitialLayoutIDs.isEmpty {
             isEditorReady = true
+            onReadyStateChange(true)
         }
     }
 
