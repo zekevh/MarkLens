@@ -595,6 +595,18 @@ final class BlockEditorCoordinator: NSObject {
 
     func registerTextView(_ tv: NSTextView) {
         highlighter.textView = tv
+        tv.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(textViewFrameDidChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: tv
+        )
+    }
+
+    @objc private func textViewFrameDidChange(_ notification: Notification) {
+        guard let tv = notification.object as? NSTextView else { return }
+        scheduleHeightUpdate(for: tv)
     }
 
     func applySearchHighlights(to textView: NSTextView, query: String) {
@@ -613,6 +625,7 @@ final class BlockEditorCoordinator: NSObject {
 
     private func updateHeight(for textView: NSTextView) {
         guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
+        lm.ensureLayout(for: tc)
         let rect = lm.usedRect(for: tc)
         let inset = textView.textContainerInset
         let extraHeight = blockKind == .table ? Self.tableVisualBottomInset : 0

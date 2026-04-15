@@ -248,6 +248,20 @@ enum MarkdownEngine {
                 pendingBlankLines = 0
             }
 
+            // Heading lines are always their own block, regardless of surrounding blank lines
+            if trimmed.range(of: #"^#{1,6} "#, options: .regularExpression) != nil {
+                if pendingBlankLines > 0 {
+                    flush()
+                    appendEmptyBlocksIfNeeded()
+                    pendingBlankLines = 0
+                } else {
+                    flush()
+                }
+                currentLines.append(line)
+                flush()
+                continue
+            }
+
             if trimmed.hasPrefix("|") {
                 let prevIsTable = currentLines.last?.trimmingCharacters(in: .whitespaces).hasPrefix("|") == true
                     || currentLines.isEmpty
