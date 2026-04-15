@@ -8,6 +8,24 @@ extension Foundation.Notification.Name {
     static let marklensOpenNewWindow = Foundation.Notification.Name("marklens.openNewWindow")
 }
 
+struct MCPWindowInfo: Codable, Sendable {
+    let id: String
+    let title: String
+    let rootFolderPath: String?
+    let filePath: String?
+    let isActive: Bool
+}
+
+nonisolated private func encodeWindowPayload(_ windows: [MCPWindowInfo]) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(windows),
+          let text = String(data: data, encoding: .utf8) else {
+        return "[]"
+    }
+    return text
+}
+
 // MARK: - MCPServer
 
 /// Embedded MCP server exposing MarkLens controls to AI agents via
@@ -22,26 +40,42 @@ actor MCPServer {
     private let transport = StatefulHTTPServerTransport()
     private let server: Server
 
-    private let openFile: @Sendable (URL) async -> Void
-    private let newWindow: @Sendable (URL?) async -> Void
-    private let activateApp: @Sendable () async -> Void
+    private let listWindows: @Sendable () async -> [MCPWindowInfo]
+    private let getWindow: @Sendable (String) async -> MCPWindowInfo?
+    private let openFolder: @Sendable (URL, String?) async -> MCPWindowInfo?
+    private let openFile: @Sendable (URL, String?) async -> MCPWindowInfo?
+    private let newWindow: @Sendable (URL?) async -> MCPWindowInfo?
+    private let setActiveWindow: @Sendable (String) async -> MCPWindowInfo?
+    private let closeWindow: @Sendable (String) async -> Bool
 
     init(
-        openFile: @escaping @Sendable (URL) async -> Void,
-        newWindow: @escaping @Sendable (URL?) async -> Void,
-        activateApp: @escaping @Sendable () async -> Void
+        listWindows: @escaping @Sendable () async -> [MCPWindowInfo],
+        getWindow: @escaping @Sendable (String) async -> MCPWindowInfo?,
+        openFolder: @escaping @Sendable (URL, String?) async -> MCPWindowInfo?,
+        openFile: @escaping @Sendable (URL, String?) async -> MCPWindowInfo?,
+        newWindow: @escaping @Sendable (URL?) async -> MCPWindowInfo?,
+        setActiveWindow: @escaping @Sendable (String) async -> MCPWindowInfo?,
+        closeWindow: @escaping @Sendable (String) async -> Bool
     ) {
+        self.listWindows = listWindows
+        self.getWindow = getWindow
+        self.openFolder = openFolder
         self.openFile = openFile
         self.newWindow = newWindow
-        self.activateApp = activateApp
+        self.setActiveWindow = setActiveWindow
+        self.closeWindow = closeWindow
         self.server = Server(
             name: "MarkLens",
             version: "1.0.0",
             instructions: """
                 Controls the MarkLens markdown editor. \
-                Use open_file to load a file in the current window, \
+                Use list_windows to inspect available editor windows, \
+                get_window to inspect one specific editor window in detail, \
+                open_folder to load a repo or folder in the active window or a specific window_id, \
+                open_file to load a file in the active window or a specific window_id, \
                 new_window to spawn an additional editor window, \
-                and activate to bring MarkLens to the foreground.
+                set_active_window to focus a specific editor window, \
+                and close_window to close a specific editor window.
                 """,
             capabilities: Server.Capabilities(tools: .init(listChanged: false))
         )
@@ -65,12 +99,70 @@ actor MCPServer {
             ListTools.Result(tools: MCPServer.toolDefinitions)
         }
 
+        let listWindows = listWindows
+        let getWindow = getWindow
+        let openFolder = openFolder
         let openFile = openFile
         let newWindow = newWindow
-        let activateApp = activateApp
+        let setActiveWindow = setActiveWindow
+        let closeWindow = closeWindow
 
         await server.withMethodHandler(CallTool.self) { params in
             switch params.name {
+            case "list_windows":
+                return CallTool.Result(
+                    content: [.text(text: encodeWindowPayload(await listWindows()), annotations: nil, _meta: nil)]
+                )
+
+            case "get_window":
+                guard let windowID = params.arguments?["window_id"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: window_id", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                guard let window = await getWindow(windowID) else {
+                    return CallTool.Result(
+                        content: [.text(text: "Window not found: \(windowID)", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                return CallTool.Result(
+                    content: [.text(text: encodeWindowPayload([window]), annotations: nil, _meta: nil)]
+                )
+
+            case "open_folder":
+                guard let path = params.arguments?["path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                let url = URL(fileURLWithPath: path, isDirectory: true)
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                      isDirectory.boolValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Folder not found: \(path)", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                let windowID = params.arguments?["window_id"]?.stringValue
+                guard let window = await openFolder(url, windowID) else {
+                    let message = windowID.map { "Window not found: \($0)" } ?? "No active MarkLens window is available"
+                    return CallTool.Result(
+                        content: [.text(text: message, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                return CallTool.Result(
+                    content: [.text(
+                        text: "Opened folder \(url.lastPathComponent) in window \(window.id)\n\(encodeWindowPayload([window]))",
+                        annotations: nil,
+                        _meta: nil
+                    )]
+                )
+
             case "open_file":
                 guard let path = params.arguments?["path"]?.stringValue else {
                     return CallTool.Result(
@@ -85,9 +177,20 @@ actor MCPServer {
                         isError: true
                     )
                 }
-                await openFile(url)
+                let windowID = params.arguments?["window_id"]?.stringValue
+                guard let window = await openFile(url, windowID) else {
+                    let message = windowID.map { "Window not found: \($0)" } ?? "No active MarkLens window is available"
+                    return CallTool.Result(
+                        content: [.text(text: message, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
                 return CallTool.Result(
-                    content: [.text(text: "Opened \(url.lastPathComponent)", annotations: nil, _meta: nil)]
+                    content: [.text(
+                        text: "Opened \(url.lastPathComponent) in window \(window.id)\n\(encodeWindowPayload([window]))",
+                        annotations: nil,
+                        _meta: nil
+                    )]
                 )
 
             case "new_window":
@@ -99,16 +202,49 @@ actor MCPServer {
                         isError: true
                     )
                 }
-                await newWindow(url)
-                let msg = url.map { "Opened new window with \($0.lastPathComponent)" } ?? "Opened new window"
+                guard let window = await newWindow(url) else {
+                    return CallTool.Result(
+                        content: [.text(text: "Failed to create a new MarkLens window", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                let msg = url.map { "Opened new window \(window.id) with \($0.lastPathComponent)" } ?? "Opened new window \(window.id)"
                 return CallTool.Result(
-                    content: [.text(text: msg, annotations: nil, _meta: nil)]
+                    content: [.text(text: "\(msg)\n\(encodeWindowPayload([window]))", annotations: nil, _meta: nil)]
                 )
 
-            case "activate":
-                await activateApp()
+            case "set_active_window":
+                guard let windowID = params.arguments?["window_id"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: window_id", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                guard let window = await setActiveWindow(windowID) else {
+                    return CallTool.Result(
+                        content: [.text(text: "Window not found: \(windowID)", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
                 return CallTool.Result(
-                    content: [.text(text: "MarkLens activated", annotations: nil, _meta: nil)]
+                    content: [.text(text: "Activated window \(window.id)\n\(encodeWindowPayload([window]))", annotations: nil, _meta: nil)]
+                )
+
+            case "close_window":
+                guard let windowID = params.arguments?["window_id"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: window_id", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                guard await closeWindow(windowID) else {
+                    return CallTool.Result(
+                        content: [.text(text: "Window not found: \(windowID)", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                return CallTool.Result(
+                    content: [.text(text: "Closed window \(windowID)", annotations: nil, _meta: nil)]
                 )
 
             default:
@@ -120,13 +256,35 @@ actor MCPServer {
     private static let toolDefinitions: [Tool] = [
         Tool(
             name: "open_file",
-            description: "Open a markdown file in the current MarkLens window",
+            description: "Open a markdown file in the active MarkLens window or a specific window_id",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "path": .object([
                         "type": .string("string"),
                         "description": .string("Absolute path to the markdown file")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID returned by list_windows")
+                    ])
+                ]),
+                "required": .array([.string("path")])
+            ])
+        ),
+        Tool(
+            name: "open_folder",
+            description: "Open a folder or repo in the active MarkLens window or a specific window_id",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path to the folder or repo")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID returned by list_windows")
                     ])
                 ]),
                 "required": .array([.string("path")])
@@ -146,11 +304,53 @@ actor MCPServer {
             ])
         ),
         Tool(
-            name: "activate",
-            description: "Bring MarkLens to the foreground",
+            name: "list_windows",
+            description: "List all editor windows with their MCP IDs, open repo/folder, and current markdown file",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:])
+            ])
+        ),
+        Tool(
+            name: "get_window",
+            description: "Get one editor window by MCP window ID, including its open repo/folder and current markdown file",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Editor window ID returned by list_windows")
+                    ])
+                ]),
+                "required": .array([.string("window_id")])
+            ])
+        ),
+        Tool(
+            name: "set_active_window",
+            description: "Focus a specific editor window so it becomes the active MarkLens window",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Editor window ID returned by list_windows")
+                    ])
+                ]),
+                "required": .array([.string("window_id")])
+            ])
+        ),
+        Tool(
+            name: "close_window",
+            description: "Close a specific editor window",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Editor window ID returned by list_windows")
+                    ])
+                ]),
+                "required": .array([.string("window_id")])
             ])
         )
     ]

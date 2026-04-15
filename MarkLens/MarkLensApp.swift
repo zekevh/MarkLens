@@ -279,6 +279,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Maps each NSWindow (by pointer identity) to the AppState it hosts.
     private var windowStates: [NSValue: AppState] = [:]
     private var windowFocusAnchors: [NSValue: WeakViewBox] = [:]
+    private var windowIDs: [NSValue: String] = [:]
+    private var windowKeysByID: [String: NSValue] = [:]
 
     /// The AppState belonging to the currently key (frontmost) window.
     private(set) weak var keyAppState: AppState?
@@ -286,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// File URL received from Finder (or MCP new_window) before a window state registers.
     /// Applied to the first window that calls register().
     var pendingFileURL: URL?
+    private var pendingWindowRequests: [PendingWindowRequest] = []
 
     private var mcpServer: MCPServer?
     private var appHotkeyMonitor: Any?
@@ -301,6 +304,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let key = NSValue(nonretainedObject: window)
         windowStates[key] = state
         windowFocusAnchors[key] = WeakViewBox(view: focusAnchor)
+        let windowID = windowIDs[key] ?? "editor-\(UUID().uuidString.prefix(8))"
+        windowIDs[key] = windowID
+        windowKeysByID[windowID] = key
+
+        if !pendingWindowRequests.isEmpty {
+            let request = pendingWindowRequests.removeFirst()
+            if let url = request.fileURL {
+                state.workspaceStore.openExternalFile(url)
+            }
+            request.resume(with: windowInfo(for: window))
+            return
+        }
+
         if let url = pendingFileURL {
             pendingFileURL = nil
             state.workspaceStore.openExternalFile(url)
@@ -322,6 +338,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWindow.didBecomeKeyNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillClose),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
         installAppHotkeyMonitor()
         startMCPServer()
     }
@@ -339,16 +361,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let server = MCPServer(
-            openFile: { @MainActor [weak self] url in
-                self?.keyAppState?.workspaceStore.openExternalFile(url)
+            listWindows: { @MainActor [weak self] in
+                self?.listMCPWindows() ?? []
+            },
+            getWindow: { @MainActor [weak self] windowID in
+                self?.windowInfo(for: self?.window(forID: windowID))
+            },
+            openFolder: { @MainActor [weak self] url, windowID in
+                let window = self?.openFolder(url, inWindowWithID: windowID)
                 NSApp.activate(ignoringOtherApps: true)
+                return window
+            },
+            openFile: { @MainActor [weak self] url, windowID in
+                let window = self?.open(url, inWindowWithID: windowID)
+                NSApp.activate(ignoringOtherApps: true)
+                return window
             },
             newWindow: { @MainActor [weak self] url in
-                if let url { self?.pendingFileURL = url }
-                NotificationCenter.default.post(name: .marklensOpenNewWindow, object: nil)
+                await self?.createWindow(opening: url)
             },
-            activateApp: { @MainActor in
-                NSApp.activate(ignoringOtherApps: true)
+            setActiveWindow: { @MainActor [weak self] windowID in
+                self?.activateWindow(withID: windowID)
+            },
+            closeWindow: { @MainActor [weak self] windowID in
+                self?.closeWindow(withID: windowID) ?? false
             }
         )
         mcpServer = server
@@ -372,15 +408,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor private func open(_ url: URL) {
+        _ = open(url, inWindowWithID: nil)
+    }
+
+    @MainActor @discardableResult
+    private func open(_ url: URL, inWindowWithID windowID: String?) -> MCPWindowInfo? {
         guard !url.hasDirectoryPath,
-              FileManager.default.fileExists(atPath: url.path) else { return }
-        if let state = keyAppState ?? windowStates.values.first {
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let (targetState, targetWindow) = resolveTargetWindow(windowID: windowID)
+
+        if let state = targetState {
             state.workspaceStore.openExternalFile(url)
-        } else {
+            if let targetWindow {
+                restoreFocus(for: targetWindow)
+                return windowInfo(for: targetWindow)
+            }
+            return nil
+        }
+
+        if windowID == nil {
             // No window registered yet (app just launched via Finder double-click).
             // Store and apply once the first window comes up.
             pendingFileURL = url
+            return nil
         }
+
+        return nil
+    }
+
+    @MainActor @discardableResult
+    private func openFolder(_ url: URL, inWindowWithID windowID: String?) -> MCPWindowInfo? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        let (targetState, targetWindow) = resolveTargetWindow(windowID: windowID)
+
+        guard let state = targetState else { return nil }
+        state.workspaceStore.setRootFolder(url)
+        if let targetWindow {
+            restoreFocus(for: targetWindow)
+            return windowInfo(for: targetWindow)
+        }
+        return nil
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -426,6 +495,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
             self.restoreFocus(for: window, forceKeyWindow: false)
+        }
+    }
+
+    @objc @MainActor private func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let key = NSValue(nonretainedObject: window)
+        let closingState = windowStates[key]
+        windowStates.removeValue(forKey: key)
+        windowFocusAnchors.removeValue(forKey: key)
+        if let windowID = windowIDs.removeValue(forKey: key) {
+            windowKeysByID.removeValue(forKey: windowID)
+        }
+        if keyAppState === closingState {
+            keyAppState = nil
         }
     }
 
@@ -492,6 +575,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func listMCPWindows() -> [MCPWindowInfo] {
+        NSApp.orderedWindows.compactMap(windowInfo(for:))
+    }
+
+    private func resolveTargetWindow(windowID: String?) -> (AppState?, NSWindow?) {
+        let targetWindow: NSWindow?
+        let targetState: AppState?
+
+        if let windowID {
+            targetWindow = window(forID: windowID)
+            targetState = targetWindow.flatMap(appState(for:))
+        } else {
+            targetWindow = NSApp.keyWindow ?? NSApp.mainWindow
+            targetState = activeAppState
+        }
+
+        return (targetState, targetWindow)
+    }
+
+    private func window(forID windowID: String) -> NSWindow? {
+        guard let key = windowKeysByID[windowID] else { return nil }
+        return key.nonretainedObjectValue as? NSWindow
+    }
+
+    private func windowInfo(for window: NSWindow?) -> MCPWindowInfo? {
+        guard let window else { return nil }
+        let key = NSValue(nonretainedObject: window)
+        guard let windowID = windowIDs[key],
+              let state = windowStates[key] else { return nil }
+
+        return MCPWindowInfo(
+            id: windowID,
+            title: window.title.isEmpty ? "Untitled" : window.title,
+            rootFolderPath: state.workspaceStore.rootFolderURL?.path,
+            filePath: state.documentStore.selectedFileURL?.path,
+            isActive: window.isKeyWindow
+        )
+    }
+
+    private func activateWindow(withID windowID: String) -> MCPWindowInfo? {
+        guard let window = window(forID: windowID) else { return nil }
+        NSApp.activate(ignoringOtherApps: true)
+        restoreFocus(for: window)
+        return windowInfo(for: window)
+    }
+
+    private func closeWindow(withID windowID: String) -> Bool {
+        guard let window = window(forID: windowID) else { return false }
+        window.close()
+        return true
+    }
+
+    private func createWindow(opening fileURL: URL?) async -> MCPWindowInfo? {
+        await withCheckedContinuation { continuation in
+            pendingWindowRequests.append(
+                PendingWindowRequest(fileURL: fileURL) { window in
+                    continuation.resume(returning: window)
+                }
+            )
+            NotificationCenter.default.post(name: .marklensOpenNewWindow, object: nil)
+        }
+    }
+
 }
 
 private final class WeakViewBox {
@@ -499,6 +645,20 @@ private final class WeakViewBox {
 
     init(view: NSView) {
         self.view = view
+    }
+}
+
+private final class PendingWindowRequest {
+    let fileURL: URL?
+    private let completion: (MCPWindowInfo?) -> Void
+
+    init(fileURL: URL?, completion: @escaping (MCPWindowInfo?) -> Void) {
+        self.fileURL = fileURL
+        self.completion = completion
+    }
+
+    func resume(with window: MCPWindowInfo?) {
+        completion(window)
     }
 }
 
