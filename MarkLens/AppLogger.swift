@@ -19,7 +19,7 @@ enum AppLogger {
 
     nonisolated private static func write(level: String, message: String, category: String) {
         let logger = Logger(subsystem: subsystem, category: category)
-        logger.log("\(level, privacy: .public) \(message, privacy: .public)")
+        logger.log("\(level, privacy: .public) \(message, privacy:  .public)")
 
         let line = "[\(timestamp())] [\(level)] [\(category)] \(message)\n"
         queue.async {

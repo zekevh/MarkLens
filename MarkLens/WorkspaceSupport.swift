@@ -486,8 +486,7 @@ enum WorkspaceTreeBuilder {
                 )
             }
 
-            let ext = child.pathExtension.lowercased()
-            guard ext == "md" || ext == "markdown" else { return nil }
+            guard isDisplayableMarkdownFile(child) else { return nil }
             return FileNode(url: child, name: child.lastPathComponent, isDirectory: false)
         }
         .sorted { lhs, rhs in
@@ -498,6 +497,16 @@ enum WorkspaceTreeBuilder {
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
         return BuildResult(nodes: nodes, watchedDirectories: watchedDirectories)
+    }
+
+    nonisolated private static func isDisplayableMarkdownFile(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        guard ext == "md" || ext == "markdown" else { return false }
+
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard !stem.hasSuffix("~") else { return false }
+
+        return true
     }
 
     nonisolated private static func replacingSubtree(

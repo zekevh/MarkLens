@@ -43,6 +43,17 @@ final class AppStateTreeTests: XCTestCase {
         XCTAssertFalse(nodes.contains(where: { $0.name == "Ignored" || $0.name == "Empty" || $0.name == "notes.txt" }))
     }
 
+    func testBuildTreeIgnoresBackupMarkdownArtifactsWithTrailingTilde() throws {
+        try "# primary".write(to: tempDirectoryURL.appendingPathComponent("_index.md"), atomically: true, encoding: .utf8)
+        try "# backup".write(to: tempDirectoryURL.appendingPathComponent("_index~.md"), atomically: true, encoding: .utf8)
+        try "# backup".write(to: tempDirectoryURL.appendingPathComponent("_index~~.md"), atomically: true, encoding: .utf8)
+        try "# backup".write(to: tempDirectoryURL.appendingPathComponent("_index~~~.markdown"), atomically: true, encoding: .utf8)
+
+        let nodes = appState.workspaceStore.buildTree(at: tempDirectoryURL)
+
+        XCTAssertEqual(nodes.map(\.name), ["_index.md"])
+    }
+
     func testBuildTreeSortsPinnedFilesAheadOfOtherEntries() throws {
         let alphaURL = tempDirectoryURL.appendingPathComponent("Alpha.md")
         let zetaURL = tempDirectoryURL.appendingPathComponent("Zeta.md")
