@@ -51,6 +51,7 @@ final class WorkspaceStore: ObservableObject {
 
         documentStore.$documentText
             .sink { [weak self] _ in
+                guard self?.documentStore.isCurrentDocumentEdited == true else { return }
                 self?.refreshSelectedFileLinkHealth()
             }
             .store(in: &cancellables)
@@ -94,6 +95,9 @@ final class WorkspaceStore: ObservableObject {
         documentStore.loadFile(url)
         if syncSidebarSelection {
             selectedSidebarURLs = [url]
+        }
+        if rootFolderURL != nil {
+            refreshWorkspaceBrokenLinkHealth()
         }
     }
 

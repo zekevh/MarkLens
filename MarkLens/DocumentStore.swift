@@ -13,6 +13,10 @@ final class DocumentStore: ObservableObject {
 
     private var currentDocument: MarkdownDocument?
 
+    var isCurrentDocumentEdited: Bool {
+        currentDocument?.isDocumentEdited == true
+    }
+
     // Security-scoped bookmarks so sandboxed re-access to recents works across launches.
     private var recentBookmarks: [String: Data] = [:]
     private let bookmarksKey = "documentStoreRecentBookmarks"

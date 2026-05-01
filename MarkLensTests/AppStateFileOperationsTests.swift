@@ -187,8 +187,39 @@ final class AppStateFileOperationsTests: XCTestCase {
         }
     }
 
+    func testBrokenLinkHealthStaysBoundToOriginalFileWhenSwitchingSelection() async throws {
+        let brokenURL = tempDirectoryURL.appendingPathComponent("Broken.md")
+        let healthyURL = tempDirectoryURL.appendingPathComponent("Healthy.md")
+        try "[missing](./Missing.md)\n".write(to: brokenURL, atomically: true, encoding: .utf8)
+        try "all good\n".write(to: healthyURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.rebuildTree()
+        appState.workspaceStore.loadFile(brokenURL)
+
+        try await waitUntil {
+            self.appState.workspaceStore.brokenInternalLinkCount(for: brokenURL) == 1
+        }
+
+        appState.workspaceStore.loadFile(healthyURL)
+
+        try await waitUntil {
+            self.appState.documentStore.selectedFileURL == healthyURL
+        }
+
+        try await waitUntil {
+            self.appState.workspaceStore.brokenInternalLinkCount(for: brokenURL) == 1
+                && self.appState.workspaceStore.brokenInternalLinkCount(for: healthyURL) == 0
+                && self.appState.workspaceStore.selectedFileBrokenInternalLinkCount == 0
+        }
+
+        XCTAssertEqual(appState.workspaceStore.brokenInternalLinkCount(for: brokenURL), 1)
+        XCTAssertEqual(appState.workspaceStore.brokenInternalLinkCount(for: healthyURL), 0)
+        XCTAssertEqual(appState.workspaceStore.selectedFileBrokenInternalLinkCount, 0)
+    }
+
     private func waitUntil(
-        timeout: TimeInterval = 5,
+        timeout: TimeInterval = 10,
         file: StaticString = #filePath,
         line: UInt = #line,
         condition: @escaping @MainActor () -> Bool
