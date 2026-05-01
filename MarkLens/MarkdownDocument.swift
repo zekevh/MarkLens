@@ -69,6 +69,13 @@ final class MarkdownDocument: NSDocument {
         updateChangeCount(.changeDone)
     }
 
+    /// Updates in-memory state after an internal rewrite already persisted to disk.
+    func applyInternalRewrite(text newText: String) {
+        guard newText != text else { return }
+        text = newText
+        updateChangeCount(.changeCleared)
+    }
+
     // MARK: - External edit detection (NSFilePresenter)
 
     /// Fired by NSFilePresenter when an external process modifies the file.

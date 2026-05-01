@@ -51,6 +51,13 @@ final class DocumentStore: ObservableObject {
         documentText = text
     }
 
+    func applyInternalFileRewrite(at url: URL, text: String) {
+        guard selectedFileURL == url else { return }
+        externalEditConflict = nil
+        documentText = text
+        currentDocument?.applyInternalRewrite(text: text)
+    }
+
     /// Synchronous flush called on app quit. With autosaveInPlace this is a
     /// safety net for the rare case the autosave timer hasn't fired yet.
     func flushPendingSave() {
@@ -148,20 +155,23 @@ final class DocumentStore: ObservableObject {
 
     // MARK: - Link Navigation
 
-    func handleLinkClick(_ urlString: String) {
+    func openExternalLinkIfNeeded(_ urlString: String) -> Bool {
         if let url = URL(string: urlString),
            let scheme = url.scheme?.lowercased(),
            ["http", "https", "mailto", "ftp"].contains(scheme) {
             NSWorkspace.shared.open(url)
-            return
+            return true
         }
+        return false
+    }
 
-        guard let base = selectedFileURL?.deletingLastPathComponent() else { return }
+    func resolveInternalLinkTarget(_ urlString: String) -> URL? {
+        guard let base = selectedFileURL?.deletingLastPathComponent() else { return nil }
         let pathPart = urlString.components(separatedBy: CharacterSet(charactersIn: "#?")).first ?? urlString
-        guard !pathPart.isEmpty else { return }
+        guard !pathPart.isEmpty else { return nil }
         let resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: base).standardized
-        guard FileManager.default.fileExists(atPath: resolvedURL.path) else { return }
-        loadFile(resolvedURL)
+        guard FileManager.default.fileExists(atPath: resolvedURL.path) else { return nil }
+        return resolvedURL
     }
 
     // MARK: - Testing Support

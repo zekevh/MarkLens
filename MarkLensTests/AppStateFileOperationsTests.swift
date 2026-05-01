@@ -64,4 +64,73 @@ final class AppStateFileOperationsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: tempDirectoryURL.appendingPathComponent("Untitled 2.md").path))
         XCTAssertEqual(appState.documentStore.selectedFileURL?.lastPathComponent, "Untitled 2.md")
     }
+
+    func testRenameFileRewritesWorkspaceLinks() throws {
+        let sourceURL = tempDirectoryURL.appendingPathComponent("Source.md")
+        let targetURL = tempDirectoryURL.appendingPathComponent("Target.md")
+        try "[go](./Target.md)\n".write(to: sourceURL, atomically: true, encoding: .utf8)
+        try "target\n".write(to: targetURL, atomically: true, encoding: .utf8)
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+
+        appState.workspaceStore.renameFile(targetURL, to: "Renamed.md")
+
+        let sourceContents = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertEqual(sourceContents, "[go](./Renamed.md)\n")
+    }
+
+    func testMoveNodeRewritesInboundAndOutboundWorkspaceLinks() throws {
+        let folderURL = tempDirectoryURL.appendingPathComponent("Docs", isDirectory: true)
+        let destinationURL = tempDirectoryURL.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+
+        let movedFileURL = folderURL.appendingPathComponent("Moved.md")
+        let siblingURL = tempDirectoryURL.appendingPathComponent("Sibling.md")
+        let referenceURL = folderURL.appendingPathComponent("Reference.md")
+
+        try "[inside](./Reference.md)\n".write(to: movedFileURL, atomically: true, encoding: .utf8)
+        try "reference\n".write(to: referenceURL, atomically: true, encoding: .utf8)
+        try "[moved](./Docs/Moved.md#section)\n".write(to: siblingURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.moveNode(movedFileURL, into: destinationURL)
+
+        let relocatedURL = destinationURL.appendingPathComponent("Moved.md")
+        let siblingContents = try String(contentsOf: siblingURL, encoding: .utf8)
+        let movedContents = try String(contentsOf: relocatedURL, encoding: .utf8)
+
+        XCTAssertEqual(siblingContents, "[moved](./Archive/Moved.md#section)\n")
+        XCTAssertEqual(movedContents, "[inside](../Docs/Reference.md)\n")
+    }
+
+    func testRenameFileKeepsOpenDocumentTextInSyncWhenCurrentNoteIsRewritten() throws {
+        let currentURL = tempDirectoryURL.appendingPathComponent("Current.md")
+        let targetURL = tempDirectoryURL.appendingPathComponent("Target.md")
+        try "[go](./Target.md)\n".write(to: currentURL, atomically: true, encoding: .utf8)
+        try "target\n".write(to: targetURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.loadFile(currentURL)
+        appState.documentStore.saveCurrentFile(text: "[go](./Target.md)\n\nUnsaved")
+
+        appState.workspaceStore.renameFile(targetURL, to: "Renamed.md")
+
+        XCTAssertEqual(appState.documentStore.selectedFileURL, currentURL)
+        XCTAssertEqual(appState.documentStore.documentText, "[go](./Renamed.md)\n\nUnsaved")
+    }
+
+    func testInternalLinkNavigationUpdatesSidebarSelection() throws {
+        let firstURL = tempDirectoryURL.appendingPathComponent("First.md")
+        let secondURL = tempDirectoryURL.appendingPathComponent("Second.md")
+        try "[next](./Second.md)\n".write(to: firstURL, atomically: true, encoding: .utf8)
+        try "second\n".write(to: secondURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.loadFile(firstURL)
+
+        appState.workspaceStore.handleLinkClick("./Second.md")
+
+        XCTAssertEqual(appState.documentStore.selectedFileURL, secondURL)
+        XCTAssertEqual(appState.workspaceStore.selectedSidebarURLs, [secondURL])
+    }
 }

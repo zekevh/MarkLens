@@ -81,7 +81,7 @@ struct MainEditorShell: View {
                         isRichEditorReady = isReady
                     },
                     onTextChange: { documentStore.saveCurrentFile(text: $0) },
-                    onLinkClick: { documentStore.handleLinkClick($0) }
+                    onLinkClick: { workspaceStore.handleLinkClick($0) }
                 )
                 .id(documentStore.selectedFileURL)
             }

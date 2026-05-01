@@ -610,6 +610,213 @@ struct WorkspaceSnapshot {
     let watchedDirectories: [URL]
 }
 
+struct WorkspaceLinkRewriteResult {
+    let rewrittenFiles: [URL: String]
+    let errors: [String]
+
+    var changedFiles: [URL] {
+        rewrittenFiles.keys.sorted { $0.path < $1.path }
+    }
+}
+
+enum WorkspaceLinkRewriter {
+    nonisolated private static let inlineLinkPattern =
+        try! NSRegularExpression(pattern: #"(\[)([^\]\n]+)(\]\()([^\)\n]+)(\))"#)
+
+    static func rewriteLinks(
+        inWorkspace rootFolderURL: URL,
+        movedURLsBySource: [URL: URL],
+        inMemoryContents: [URL: String] = [:]
+    ) -> WorkspaceLinkRewriteResult {
+        let fm = FileManager.default
+        let normalizedRoot = rootFolderURL.standardizedFileURL
+        let normalizedMoves = Dictionary(uniqueKeysWithValues: movedURLsBySource.map {
+            ($0.key.standardizedFileURL, $0.value.standardizedFileURL)
+        })
+        let originalURLsByMovedURL = Dictionary(uniqueKeysWithValues: normalizedMoves.map { ($0.value, $0.key) })
+
+        let markdownFiles = markdownFiles(in: normalizedRoot, fileManager: fm)
+        guard !markdownFiles.isEmpty else {
+            return WorkspaceLinkRewriteResult(rewrittenFiles: [:], errors: [])
+        }
+
+        var rewrittenFiles: [URL: String] = [:]
+        var errors: [String] = []
+
+        for fileURL in markdownFiles {
+            let sourceText: String
+            if let inMemory = inMemoryContents[fileURL] {
+                sourceText = inMemory
+            } else {
+                do {
+                    sourceText = try String(contentsOf: fileURL, encoding: .utf8)
+                } catch {
+                    errors.append("Could not read \"\(fileURL.lastPathComponent)\" for link updates.")
+                    continue
+                }
+            }
+
+            guard let rewritten = rewriteContent(
+                sourceText,
+                sourceFileURL: fileURL,
+                linkResolutionBaseURL: originalURLsByMovedURL[fileURL]?.deletingLastPathComponent(),
+                movedURLsBySource: normalizedMoves
+            ), rewritten != sourceText else {
+                continue
+            }
+
+            do {
+                try rewritten.write(to: fileURL, atomically: true, encoding: .utf8)
+                rewrittenFiles[fileURL] = rewritten
+            } catch {
+                errors.append("Could not update links in \"\(fileURL.lastPathComponent)\".")
+            }
+        }
+
+        return WorkspaceLinkRewriteResult(rewrittenFiles: rewrittenFiles, errors: errors)
+    }
+
+    nonisolated private static func markdownFiles(in rootFolderURL: URL, fileManager: FileManager) -> [URL] {
+        guard let enumerator = fileManager.enumerator(
+            at: rootFolderURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var urls: [URL] = []
+        for case let url as URL in enumerator {
+            guard isDisplayableMarkdownFile(url) else { continue }
+            urls.append(url.standardizedFileURL)
+        }
+        return urls
+    }
+
+    nonisolated private static func isDisplayableMarkdownFile(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        guard ext == "md" || ext == "markdown" else { return false }
+
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard !stem.hasSuffix("~") else { return false }
+
+        return true
+    }
+
+    nonisolated private static func rewriteContent(
+        _ text: String,
+        sourceFileURL: URL,
+        linkResolutionBaseURL: URL?,
+        movedURLsBySource: [URL: URL]
+    ) -> String? {
+        let fullRange = NSRange(location: 0, length: (text as NSString).length)
+        let sourceBaseURL = sourceFileURL.deletingLastPathComponent()
+        let lookupBaseURL = linkResolutionBaseURL ?? sourceBaseURL
+        let mutable = NSMutableString(string: text)
+        var replacements: [(NSRange, String)] = []
+
+        inlineLinkPattern.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+            guard let match else { return }
+            let destinationRange = match.range(at: 4)
+            guard destinationRange.location != NSNotFound,
+                  let destinationSubstringRange = Range(destinationRange, in: text) else {
+                return
+            }
+
+            let destination = String(text[destinationSubstringRange])
+            guard let rewritten = rewriteDestination(
+                destination,
+                lookupBaseURL: lookupBaseURL,
+                rewrittenBaseURL: sourceBaseURL,
+                movedURLsBySource: movedURLsBySource
+            ), rewritten != destination else {
+                return
+            }
+
+            replacements.append((destinationRange, rewritten))
+        }
+
+        guard !replacements.isEmpty else { return nil }
+        for (range, replacement) in replacements.reversed() {
+            mutable.replaceCharacters(in: range, with: replacement)
+        }
+        return mutable as String
+    }
+
+    nonisolated private static func rewriteDestination(
+        _ destination: String,
+        lookupBaseURL: URL,
+        rewrittenBaseURL: URL,
+        movedURLsBySource: [URL: URL]
+    ) -> String? {
+        if let absoluteURL = URL(string: destination),
+           let scheme = absoluteURL.scheme?.lowercased(),
+           ["http", "https", "mailto", "ftp"].contains(scheme) {
+            return nil
+        }
+
+        let splitIndex = destination.firstIndex { $0 == "#" || $0 == "?" }
+        let pathPart = splitIndex.map { String(destination[..<$0]) } ?? destination
+        let suffix = splitIndex.map { String(destination[$0...]) } ?? ""
+        guard !pathPart.isEmpty else { return nil }
+
+        let resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: lookupBaseURL).standardizedFileURL
+        if let relocatedURL = relocatedURL(for: resolvedURL, movedURLsBySource: movedURLsBySource) {
+            let relativePath = relativePath(from: rewrittenBaseURL, to: relocatedURL)
+            return relativePath + suffix
+        }
+
+        guard lookupBaseURL.standardizedFileURL != rewrittenBaseURL.standardizedFileURL else {
+            return nil
+        }
+
+        let rebasedPath = relativePath(from: rewrittenBaseURL, to: resolvedURL)
+        return rebasedPath == pathPart ? nil : rebasedPath + suffix
+    }
+
+    nonisolated private static func relocatedURL(
+        for resolvedURL: URL,
+        movedURLsBySource: [URL: URL]
+    ) -> URL? {
+        if let exactMatch = movedURLsBySource[resolvedURL] {
+            return exactMatch
+        }
+
+        let path = resolvedURL.path
+        let candidateParents = movedURLsBySource.keys
+            .filter { path.hasPrefix($0.path + "/") }
+            .sorted { $0.path.count > $1.path.count }
+
+        guard let matchedParent = candidateParents.first,
+              let relocatedParent = movedURLsBySource[matchedParent] else {
+            return nil
+        }
+
+        let suffix = String(path.dropFirst(matchedParent.path.count + 1))
+        return relocatedParent.appendingPathComponent(suffix).standardizedFileURL
+    }
+
+    nonisolated private static func relativePath(from baseURL: URL, to targetURL: URL) -> String {
+        let baseComponents = baseURL.standardizedFileURL.pathComponents
+        let targetComponents = targetURL.standardizedFileURL.pathComponents
+        let commonCount = zip(baseComponents, targetComponents).prefix { $0 == $1 }.count
+
+        let upwardCount = max(baseComponents.count - commonCount, 0)
+        let upwardComponents = Array(repeating: "..", count: upwardCount)
+        let downwardComponents = Array(targetComponents.dropFirst(commonCount))
+        let components = upwardComponents + downwardComponents
+
+        if components.isEmpty {
+            return "./" + targetURL.lastPathComponent
+        }
+        let path = NSString.path(withComponents: components)
+        if path.hasPrefix("../") || path.hasPrefix("./") {
+            return path
+        }
+        return "./" + path
+    }
+}
+
 enum WorkspaceRefreshService {
     static func buildSnapshot(at folder: URL, pinnedURLs: Set<String>) async -> WorkspaceSnapshot {
         await Task.detached(priority: .utility) {

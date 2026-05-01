@@ -113,6 +113,33 @@ final class MarkLensUITests: XCTestCase {
         XCTAssertEqual(rawEditor(in: app).value as? String, "Disk version from test")
     }
 
+    func testRenameUpdatesMarkdownLinkInAnotherNote() throws {
+        try "[beta](./Beta.md)\n".write(
+            to: tempDirectoryURL.appendingPathComponent("Alpha.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "# Beta\n\nSecond note".write(
+            to: tempDirectoryURL.appendingPathComponent("Beta.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let app = launchApp(rootFolder: tempDirectoryURL)
+        let betaRow = app.staticTexts["Beta.md"]
+        XCTAssertTrue(betaRow.waitForExistence(timeout: 5))
+        betaRow.click()
+
+        let renameButton = app.buttons["uiTestRenameButton"]
+        XCTAssertTrue(renameButton.waitForExistence(timeout: 5))
+        renameButton.click()
+
+        let alphaRow = app.staticTexts["Alpha.md"]
+        XCTAssertTrue(alphaRow.waitForExistence(timeout: 5))
+        alphaRow.click()
+        XCTAssertEqual(rawEditor(in: app).value as? String, "[beta](./Renamed Alpha.md)\n")
+    }
+
     func testOutlinePanelShowsFileHistoryAndLocalChanges() throws {
         try initializeGitRepository(at: tempDirectoryURL)
 

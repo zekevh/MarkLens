@@ -248,6 +248,7 @@ final class WorkspaceStore: ObservableObject {
             present(error, context: "Could not rename \"\(url.lastPathComponent)\"")
             return
         }
+        rewriteLinksIfNeeded(for: [url: newURL])
         handleRenamedFile(from: url, to: newURL)
     }
 
@@ -281,6 +282,7 @@ final class WorkspaceStore: ObservableObject {
             movedURLsBySource[sourceURL] = targetURL
         }
 
+        rewriteLinksIfNeeded(for: movedURLsBySource)
         handleMovedFiles(movedURLsBySource)
     }
 
@@ -399,6 +401,34 @@ final class WorkspaceStore: ObservableObject {
         documentStore.errorMessage = "\(context): \(error.localizedDescription)"
     }
 
+    private func rewriteLinksIfNeeded(for movedURLsBySource: [URL: URL]) {
+        guard let rootFolderURL, !movedURLsBySource.isEmpty else { return }
+
+        var inMemoryContents: [URL: String] = [:]
+        if let selectedFileURL = documentStore.selectedFileURL {
+            if let movedURL = movedURLsBySource[selectedFileURL] {
+                inMemoryContents[movedURL.standardizedFileURL] = documentStore.documentText
+            } else {
+                inMemoryContents[selectedFileURL.standardizedFileURL] = documentStore.documentText
+            }
+        }
+
+        let result = WorkspaceLinkRewriter.rewriteLinks(
+            inWorkspace: rootFolderURL,
+            movedURLsBySource: movedURLsBySource,
+            inMemoryContents: inMemoryContents
+        )
+
+        let selectedFileURL = documentStore.selectedFileURL?.standardizedFileURL
+        for (fileURL, text) in result.rewrittenFiles where fileURL == selectedFileURL {
+            documentStore.applyInternalFileRewrite(at: fileURL, text: text)
+        }
+
+        if !result.errors.isEmpty {
+            documentStore.errorMessage = result.errors.joined(separator: "\n")
+        }
+    }
+
     private func handleCreatedFile(at url: URL) {
         if rootFolderURL != nil {
             rebuildTree()
@@ -406,6 +436,21 @@ final class WorkspaceStore: ObservableObject {
             rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
         }
         loadFile(url)
+    }
+
+    func handleLinkClick(_ urlString: String) {
+        if documentStore.openExternalLinkIfNeeded(urlString) {
+            return
+        }
+        guard let resolvedURL = documentStore.resolveInternalLinkTarget(urlString) else { return }
+        if let rootFolderURL {
+            let rootPath = rootFolderURL.standardizedFileURL.path
+            if resolvedURL.standardizedFileURL.path.hasPrefix(rootPath + "/") || resolvedURL.standardizedFileURL == rootFolderURL {
+                loadFile(resolvedURL)
+                return
+            }
+        }
+        documentStore.loadFile(resolvedURL)
     }
 
     private func handleDeletedFile(at url: URL) {
