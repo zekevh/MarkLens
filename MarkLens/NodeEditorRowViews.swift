@@ -256,8 +256,14 @@ struct BlockRowView: View {
 }
 
 private struct FrontMatterSummaryLabel: View {
+    @State private var measuredWidths: [String: CGFloat] = [:]
+
     let content: String
     private static let yamlListItemPattern = try! NSRegularExpression(pattern: #"^\s*-\s+(.+?)\s*$"#)
+    private static let chipFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+    private static let titleMaxWidth: CGFloat = 280
+    private static let titleMinWidth: CGFloat = 110
+    private static let updatedMaxWidth: CGFloat = 96
 
     private var title: String? {
         frontMatterScalarValue(for: "title")
@@ -272,24 +278,33 @@ private struct FrontMatterSummaryLabel: View {
     }
 
     var body: some View {
+        let layout = summaryLayout(for: measuredWidths["container"] ?? 0)
+
         HStack(spacing: 10) {
             Text("Front Matter")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
 
             if let title, !title.isEmpty {
                 Text(title)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: layout.titleWidth, alignment: .leading)
             }
 
-            ForEach(tags, id: \.self) { tag in
-                Text(tag)
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+            if !layout.visibleTags.isEmpty || layout.hiddenTagCount > 0 {
+                HStack(spacing: 10) {
+                    ForEach(layout.visibleTags, id: \.self) { tag in
+                        tagChip(tag)
+                    }
+
+                    if layout.hiddenTagCount > 0 {
+                        tagChip("+\(layout.hiddenTagCount)")
+                    }
+                }
             }
 
             Spacer(minLength: 0)
@@ -299,9 +314,133 @@ private struct FrontMatterSummaryLabel: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: Self.updatedMaxWidth, alignment: .trailing)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(widthReader(id: "container"))
+        .background(intrinsicWidthReaders)
+        .onPreferenceChange(FrontMatterSummaryWidthPreferenceKey.self) { widths in
+            measuredWidths.merge(widths) { _, new in new }
+        }
+    }
+
+    @ViewBuilder
+    private var intrinsicWidthReaders: some View {
+        HStack(spacing: 0) {
+            Text("Front Matter")
+                .font(.caption.weight(.semibold))
+                .fixedSize(horizontal: true, vertical: false)
+                .background(widthReader(id: "label"))
+                .hidden()
+
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: true, vertical: false)
+                    .background(widthReader(id: "title"))
+                    .hidden()
+            }
+
+            if let updated, !updated.isEmpty {
+                Text(updated)
+                    .font(.caption)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .background(widthReader(id: "updated"))
+                    .hidden()
+            }
+        }
+    }
+
+    private func tagChip(_ label: String) -> some View {
+        Text(label)
+            .font(.caption.weight(.medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Color.accentColor.opacity(0.12), in: Capsule())
+    }
+
+    private func summaryLayout(for containerWidth: CGFloat) -> FrontMatterSummaryLayout {
+        let titleIntrinsicWidth = measuredWidths["title"] ?? 0
+        let labelWidth = measuredWidths["label"] ?? 0
+        let updatedWidth = min(measuredWidths["updated"] ?? 0, Self.updatedMaxWidth)
+
+        let reservedSpacing: CGFloat = 30
+        let reservedWidth = labelWidth + updatedWidth + reservedSpacing
+        let remainingWidth = max(0, containerWidth - reservedWidth)
+        let titleWidth = min(titleIntrinsicWidth, max(Self.titleMinWidth, min(Self.titleMaxWidth, remainingWidth * 0.5)))
+        let tagWidthBudget = max(0, containerWidth - reservedWidth - titleWidth - 10)
+        let tagLayout = fittedTags(for: tagWidthBudget)
+
+        return FrontMatterSummaryLayout(
+            titleWidth: titleWidth,
+            visibleTags: tagLayout.visibleTags,
+            hiddenTagCount: tagLayout.hiddenTagCount
+        )
+    }
+
+    private func fittedTags(for availableWidth: CGFloat) -> FrontMatterTagLayout {
+        let chipSpacing: CGFloat = 10
+
+        guard availableWidth > 0, !tags.isEmpty else {
+            return FrontMatterTagLayout(visibleTags: [], hiddenTagCount: tags.count)
+        }
+
+        var visible: [String] = []
+        var usedWidth: CGFloat = 0
+
+        for (index, tag) in tags.enumerated() {
+            let chipWidth = tagChipWidth(tag)
+            let spacingBefore: CGFloat = visible.isEmpty ? 0 : chipSpacing
+            let remainingCount = tags.count - (index + 1)
+            let overflowReserve = remainingCount > 0 ? (spacingBefore + tagChipWidth("+\(remainingCount)")) : 0
+
+            if usedWidth + spacingBefore + chipWidth + overflowReserve <= availableWidth {
+                visible.append(tag)
+                usedWidth += spacingBefore + chipWidth
+            } else {
+                break
+            }
+        }
+
+        var hiddenCount = tags.count - visible.count
+        while hiddenCount > 0 {
+            let overflowWidth = tagChipWidth("+\(hiddenCount)")
+            let spacingBeforeOverflow: CGFloat = visible.isEmpty ? 0 : chipSpacing
+            if usedWidth + spacingBeforeOverflow + overflowWidth <= availableWidth {
+                break
+            }
+            guard let removed = visible.popLast() else { break }
+            hiddenCount += 1
+            usedWidth -= tagChipWidth(removed)
+            if !visible.isEmpty {
+                usedWidth -= chipSpacing
+            }
+        }
+
+        if visible.isEmpty, hiddenCount == tags.count, tagChipWidth("+\(hiddenCount)") > availableWidth {
+            return FrontMatterTagLayout(visibleTags: [], hiddenTagCount: 0)
+        }
+
+        return FrontMatterTagLayout(visibleTags: visible, hiddenTagCount: hiddenCount)
+    }
+
+    private func tagChipWidth(_ label: String) -> CGFloat {
+        let textWidth = (label as NSString).size(withAttributes: [.font: Self.chipFont]).width
+        return ceil(textWidth) + 18 + 18
+    }
+
+    private func widthReader(id: String) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: FrontMatterSummaryWidthPreferenceKey.self,
+                value: [id: proxy.size.width]
+            )
+        }
     }
 
     private func frontMatterScalarValue(for key: String) -> String? {
@@ -373,6 +512,25 @@ private struct FrontMatterSummaryLabel: View {
             return nil
         }
         return stripMatchingQuotes(from: String(line[valueRange]).trimmingCharacters(in: .whitespaces))
+    }
+}
+
+private struct FrontMatterSummaryLayout {
+    let titleWidth: CGFloat
+    let visibleTags: [String]
+    let hiddenTagCount: Int
+}
+
+private struct FrontMatterTagLayout {
+    let visibleTags: [String]
+    let hiddenTagCount: Int
+}
+
+private struct FrontMatterSummaryWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 

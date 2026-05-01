@@ -11,8 +11,8 @@ enum CodeHighlighter {
     static func apply(to storage: NSTextStorage, codeRange: NSRange, language: String) {
         guard codeRange.length > 0 else { return }
         if ["yaml", "yml"].contains(language) {
-            applyYAMLKeys(storage, codeRange)
-            applyYAMLKeywords(storage, codeRange)
+            applyYAML(storage, codeRange)
+            return
         }
         applyKeywords(storage, codeRange, language)
         applyNumbers(storage, codeRange)
@@ -23,17 +23,41 @@ enum CodeHighlighter {
     // MARK: - Token colors
 
     private enum Colors {
-        static let keyword = NSColor.systemPurple
-        static let property = NSColor.systemRed
-        static let string  = NSColor.systemOrange
+        static let keyword: NSColor = {
+            NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(red: 0.98, green: 0.49, blue: 0.76, alpha: 1)
+                    : NSColor(red: 0.73, green: 0.10, blue: 0.39, alpha: 1)
+            }
+        }()
+        static let property: NSColor = {
+            NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(red: 0.98, green: 0.49, blue: 0.76, alpha: 1)
+                    : NSColor(red: 0.73, green: 0.10, blue: 0.39, alpha: 1)
+            }
+        }()
+        static let string: NSColor = {
+            NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(red: 0.98, green: 0.58, blue: 0.48, alpha: 1)
+                    : NSColor(red: 0.71, green: 0.22, blue: 0.11, alpha: 1)
+            }
+        }()
         static let comment: NSColor = {
             NSColor(name: nil) { appearance in
                 appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                    ? NSColor(red: 0.38, green: 0.72, blue: 0.40, alpha: 1)
-                    : NSColor(red: 0.15, green: 0.52, blue: 0.18, alpha: 1)
+                    ? NSColor(red: 0.51, green: 0.56, blue: 0.62, alpha: 1)
+                    : NSColor(red: 0.34, green: 0.37, blue: 0.42, alpha: 1)
             }
         }()
-        static let number  = NSColor.systemBlue
+        static let number: NSColor = {
+            NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(red: 0.84, green: 0.69, blue: 0.46, alpha: 1)
+                    : NSColor(red: 0.64, green: 0.45, blue: 0.15, alpha: 1)
+            }
+        }()
     }
 
     // MARK: - Appliers
@@ -75,14 +99,15 @@ enum CodeHighlighter {
         }
     }
 
+    private static func applyYAML(_ storage: NSTextStorage, _ range: NSRange) {
+        applyYAMLKeys(storage, range)
+        applyStrings(storage, range, "yaml")
+        applyComments(storage, range, "yaml")
+    }
+
     private static func applyYAMLKeys(_ storage: NSTextStorage, _ range: NSRange) {
         let pattern = #"(?m)^(?:\s*-\s+)?([A-Za-z0-9_.-]+)(?=\s*:)"#
         run(pattern, storage, range, Colors.property, matchGroup: 1)
-    }
-
-    private static func applyYAMLKeywords(_ storage: NSTextStorage, _ range: NSRange) {
-        run(#"\b(true|false|yes|no|on|off|null)\b"#, storage, range, Colors.keyword, options: [.caseInsensitive])
-        run(#"(?m)(?<=:\s)~(?=\s*$)"#, storage, range, Colors.keyword)
     }
 
     // MARK: - Helpers
