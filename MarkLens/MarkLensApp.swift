@@ -134,10 +134,16 @@ private struct AppCommands: Commands {
         (NSApp.delegate as? AppDelegate)?.performCloseFolder()
     }
 
+    private func performNewTab() {
+        (NSApp.delegate as? AppDelegate)?.performNewTab()
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New File") { performNewFile() }
                 .keyboardShortcut("n", modifiers: .command)
+            Button("New Tab") { performNewTab() }
+                .keyboardShortcut("t", modifiers: .command)
             Button("New Window") { openWindow(id: "main") }
                 .keyboardShortcut("n", modifiers: [.command, .option])
         }
@@ -334,6 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CrashReporter.shared.start()
+        NSWindow.allowsAutomaticWindowTabbing = true
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NotificationCenter.default.addObserver(
@@ -468,6 +475,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func performNewFile() {
         activeAppState?.workspaceStore.createFile()
+    }
+
+    func performNewTab() {
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            window.tabbingMode = .preferred
+        }
+
+        if NSApp.sendAction(Selector(("newTab:")), to: nil, from: nil) {
+            return
+        }
+
+        NotificationCenter.default.post(name: .marklensOpenNewWindow, object: nil)
     }
 
     func performQuickOpen() {

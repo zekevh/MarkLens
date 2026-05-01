@@ -14,6 +14,10 @@ struct ContentView: View {
         environment[UITestLaunchEnvironment.harness] == "1"
     }
 
+    private var windowTitle: String {
+        documentStore.selectedFileURL?.lastPathComponent ?? "MarkLens"
+    }
+
     var body: some View {
         ZStack {
             NavigationSplitView(columnVisibility: $appState.sidebarVisibility) {
@@ -28,6 +32,7 @@ struct ContentView: View {
                 .zIndex(1)
         }
         .navigationSplitViewStyle(.balanced)
+        .navigationTitle(windowTitle)
         .toolbar { contentToolbar }
         .toolbarBackground(.hidden, for: .windowToolbar)
         .alert("Error", isPresented: Binding(

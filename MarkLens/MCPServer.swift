@@ -193,6 +193,58 @@ actor MCPServer {
                     )]
                 )
 
+            case "read_frontmatter":
+                guard let path = params.arguments?["path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+                let requestedWindowID = params.arguments?["window_id"]?.stringValue
+                let baseURL: URL?
+                if path.hasPrefix("/") {
+                    baseURL = nil
+                } else if let requestedWindowID {
+                    guard let window = await getWindow(requestedWindowID) else {
+                        return CallTool.Result(
+                            content: [.text(text: "Window not found: \(requestedWindowID)", annotations: nil, _meta: nil)],
+                            isError: true
+                        )
+                    }
+                    baseURL = MCPServer.baseURL(for: window)
+                } else {
+                    let activeWindow = await listWindows().first(where: \.isActive)
+                    baseURL = activeWindow.flatMap(MCPServer.baseURL(for:))
+                }
+
+                do {
+                    let output = try FrontmatterReader.readFrontmatter(at: path, relativeTo: baseURL)
+                    switch output {
+                    case .single(let frontmatter):
+                        let summary = frontmatter == nil
+                            ? "No frontmatter found in \(path)"
+                            : "Read frontmatter from \(path)"
+                        return try CallTool.Result(
+                            content: [.text(text: summary, annotations: nil, _meta: nil)],
+                            structuredContent: frontmatter,
+                            isError: false
+                        )
+
+                    case .bulk(let matches):
+                        return try CallTool.Result(
+                            content: [.text(text: "Read frontmatter from \(matches.count) file(s)", annotations: nil, _meta: nil)],
+                            structuredContent: matches,
+                            isError: false
+                        )
+                    }
+                } catch {
+                    return CallTool.Result(
+                        content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
             case "new_window":
                 let path = params.arguments?["path"]?.stringValue
                 let url = path.map { URL(fileURLWithPath: $0) }
@@ -254,6 +306,30 @@ actor MCPServer {
     }
 
     private static let toolDefinitions: [Tool] = [
+        Tool(
+            name: "read_frontmatter",
+            description: "Read YAML frontmatter from one markdown file or every markdown file matching a glob pattern, returning parsed structured data only",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path, relative path, or glob pattern such as *.md")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID used to resolve relative paths")
+                    ])
+                ]),
+                "required": .array([.string("path")])
+            ]),
+            annotations: .init(
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+                openWorldHint: false
+            )
+        ),
         Tool(
             name: "open_file",
             description: "Open a markdown file in the active MarkLens window or a specific window_id",
@@ -487,5 +563,15 @@ actor MCPServer {
                 cont.resume(returning: err == nil)
             })
         }
+    }
+
+    private static func baseURL(for window: MCPWindowInfo) -> URL? {
+        if let rootFolderPath = window.rootFolderPath {
+            return URL(fileURLWithPath: rootFolderPath, isDirectory: true)
+        }
+        if let filePath = window.filePath {
+            return URL(fileURLWithPath: filePath).deletingLastPathComponent()
+        }
+        return nil
     }
 }

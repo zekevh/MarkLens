@@ -43,9 +43,15 @@ struct SidebarView: View {
                         }
                     }
 
-                    Section("Files") {
+                    Section {
                         OutlineGroup(workspaceStore.rootNodes, children: \.optionalChildren) { node in
                             sidebarNodeRow(node)
+                        }
+                    } header: {
+                        HStack(spacing: 6) {
+                            Text("Files")
+                            Text("\(workspaceStore.markdownFileCount)")
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

@@ -96,6 +96,10 @@ final class WorkspaceStore: ObservableObject {
         pinnedFileNodes(from: rootNodes)
     }
 
+    var markdownFileCount: Int {
+        markdownFileCount(in: rootNodes)
+    }
+
     func normalizedRenameTarget(for url: URL, requestedName: String) -> String {
         let trimmedName = requestedName.trimmingCharacters(in: .whitespacesAndNewlines)
         let ext = url.pathExtension
@@ -378,6 +382,16 @@ final class WorkspaceStore: ObservableObject {
             }
 
             return isPinned(node.url) ? [node] : []
+        }
+    }
+
+    private func markdownFileCount(in nodes: [FileNode]) -> Int {
+        nodes.reduce(into: 0) { count, node in
+            if node.isDirectory {
+                count += markdownFileCount(in: node.children ?? [])
+            } else {
+                count += 1
+            }
         }
     }
 
