@@ -101,6 +101,7 @@ enum CodeHighlighter {
 
     private static func applyYAML(_ storage: NSTextStorage, _ range: NSRange) {
         applyYAMLKeys(storage, range)
+        applyKeywords(storage, range, "json")
         applyStrings(storage, range, "yaml")
         applyComments(storage, range, "yaml")
     }

@@ -138,6 +138,11 @@ private struct AppCommands: Commands {
         (NSApp.delegate as? AppDelegate)?.performNewTab()
     }
 
+    private func openHelp() {
+        guard let url = URL(string: "https://github.com/zekevh/MarkLens") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New File") { performNewFile() }
@@ -210,6 +215,12 @@ private struct AppCommands: Commands {
                 state.documentStore.isRawMode.toggle()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
+        }
+        CommandGroup(replacing: .help) {
+            Button("MarkLens Help") {
+                openHelp()
+            }
+            .keyboardShortcut("/", modifiers: [.command, .shift])
         }
     }
 }
