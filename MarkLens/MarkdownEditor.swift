@@ -277,6 +277,7 @@ class EditorCoordinator: NSObject {
         applyBase(to: full, storage: storage)
         applyInline(to: full, storage: storage)
         applyFenced(to: full, storage: storage)
+        applyFrontMatter(to: storage)
         applyTables(to: full, storage: storage)
         storage.endEditing()
     }
@@ -551,6 +552,44 @@ class EditorCoordinator: NSObject {
             pos = scanPos
         }
     }
+
+    private func applyFrontMatter(to storage: NSTextStorage) {
+        guard let match = Patterns.frontMatter.firstMatch(
+            in: storage.string,
+            options: [],
+            range: NSRange(location: 0, length: storage.length)
+        ) else { return }
+
+        let fullRange = match.range(at: 0)
+        let bodyRange = match.range(at: 1)
+        guard fullRange.location != NSNotFound, fullRange.length > 0 else { return }
+
+        let markdownHRKey = NSAttributedString.Key("md.hr")
+        let openingLineRange = (storage.string as NSString).lineRange(for: NSRange(location: fullRange.location, length: 0))
+        let closingLineRange = bodyRange.location == NSNotFound || bodyRange.length == 0
+            ? openingLineRange
+            : (storage.string as NSString).lineRange(for: NSRange(location: NSMaxRange(bodyRange), length: 0))
+
+        storage.removeAttribute(markdownHRKey, range: fullRange)
+        storage.removeAttribute(.backgroundColor, range: fullRange)
+        storage.removeAttribute(.strikethroughStyle, range: fullRange)
+        storage.removeAttribute(.strikethroughColor, range: fullRange)
+        storage.removeAttribute(.underlineStyle, range: fullRange)
+        storage.removeAttribute(.link, range: fullRange)
+
+        storage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: fullRange)
+        storage.addAttribute(.font, value: Styles.monoFont, range: fullRange)
+        storage.addAttribute(.paragraphStyle, value: Styles.codeParagraphStyle, range: fullRange)
+        storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: openingLineRange)
+        if closingLineRange.location >= fullRange.location,
+           NSMaxRange(closingLineRange) <= NSMaxRange(fullRange) {
+            storage.addAttribute(.foregroundColor, value: Styles.syntaxColor, range: closingLineRange)
+        }
+
+        if bodyRange.location != NSNotFound, bodyRange.length > 0 {
+            CodeHighlighter.apply(to: storage, codeRange: bodyRange, language: "yaml")
+        }
+    }
 }
 
 // MARK: NSTextViewDelegate
@@ -582,6 +621,7 @@ extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
         applyInline(to: paraRange, storage: textStorage)
         // Apply tables immediately so pipes/separator never flash as raw text while typing
         if textStorage.string.contains("|") { applyTables(to: full, storage: textStorage) }
+        applyFrontMatter(to: textStorage)
         textStorage.endEditing()
         textView?.needsDisplay = true
 
@@ -591,6 +631,7 @@ extension EditorCoordinator: @preconcurrency NSTextStorageDelegate {
             let docFull = NSRange(location: 0, length: ts.length)
             ts.beginEditing()
             if ts.string.contains("```") { self.applyFenced(to: docFull, storage: ts) }
+            self.applyFrontMatter(to: ts)
             ts.endEditing()
         }
         fullScanWorkItem = item
@@ -677,6 +718,7 @@ enum Patterns {
     static let taskListItem  = try! NSRegularExpression(pattern: #"^([-*][ \t])(\[[ xX]\])([ \t])(.*)"#, options: .anchorsMatchLines)
     static let link          = try! NSRegularExpression(pattern: #"(\[)([^\]\n]+)(\]\()([^\)\n]+)(\))"#)
     static let horizontalRule = try! NSRegularExpression(pattern: #"^(\-{3,}|\*{3,}|_{3,})[ \t]*$"#, options: .anchorsMatchLines)
+    static let frontMatter   = try! NSRegularExpression(pattern: #"(?s)\A---[ \t]*\r?\n(.*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)"#)
     static let tableSeparator = try! NSRegularExpression(pattern: #"^\|[-:| \t]+$"#, options: .anchorsMatchLines)
     static let tableRow      = try! NSRegularExpression(pattern: #"^\|[^\n]+"#, options: .anchorsMatchLines)
     static let pipe          = try! NSRegularExpression(pattern: #"\|"#)

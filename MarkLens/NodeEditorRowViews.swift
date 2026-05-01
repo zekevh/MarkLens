@@ -257,9 +257,14 @@ struct BlockRowView: View {
 
 private struct FrontMatterSummaryLabel: View {
     let content: String
+    private static let yamlListItemPattern = try! NSRegularExpression(pattern: #"^\s*-\s+(.+?)\s*$"#)
 
     private var title: String? {
         frontMatterScalarValue(for: "title")
+    }
+
+    private var updated: String? {
+        frontMatterScalarValue(for: "updated")
     }
 
     private var tags: [String] {
@@ -288,6 +293,13 @@ private struct FrontMatterSummaryLabel: View {
             }
 
             Spacer(minLength: 0)
+
+            if let updated, !updated.isEmpty {
+                Text(updated)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -309,19 +321,58 @@ private struct FrontMatterSummaryLabel: View {
     private func frontMatterListValue(for key: String) -> [String] {
         let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.components(separatedBy: "\n")
-        let listHeader = "\(key):"
-        guard let startIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == listHeader }) else {
-            return []
-        }
+        let prefix = "\(key):"
 
-        var result: [String] = []
-        for line in lines.dropFirst(startIndex + 1) {
-            if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-            guard line.hasPrefix("  - ") || line.hasPrefix("\t- ") else { break }
-            let value = line.trimmingCharacters(in: .whitespaces).dropFirst(2).trimmingCharacters(in: .whitespaces)
-            if !value.isEmpty { result.append(value) }
+        for (index, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix(prefix) else { continue }
+
+            let inlineValue = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+            if !inlineValue.isEmpty {
+                return parseInlineYAMLList(String(inlineValue))
+            }
+
+            var result: [String] = []
+            for nestedLine in lines.dropFirst(index + 1) {
+                if nestedLine.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                guard let unquoted = parseYAMLListItem(from: nestedLine) else { break }
+                if !unquoted.isEmpty { result.append(unquoted) }
+            }
+            return result
         }
-        return result
+        return []
+    }
+
+    private func parseInlineYAMLList(_ value: String) -> [String] {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.first == "[", trimmed.last == "]" else { return [] }
+
+        let inner = String(trimmed.dropFirst().dropLast())
+        guard !inner.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+
+        return inner
+            .split(separator: ",", omittingEmptySubsequences: false)
+            .map { stripMatchingQuotes(from: String($0).trimmingCharacters(in: .whitespaces)) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func stripMatchingQuotes(from value: String) -> String {
+        guard value.count >= 2 else { return value }
+        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+            (value.hasPrefix("'") && value.hasSuffix("'")) {
+            return String(value.dropFirst().dropLast())
+        }
+        return value
+    }
+
+    private func parseYAMLListItem(from line: String) -> String? {
+        let nsLine = line as NSString
+        let range = NSRange(location: 0, length: nsLine.length)
+        guard let match = Self.yamlListItemPattern.firstMatch(in: line, range: range),
+              let valueRange = Range(match.range(at: 1), in: line) else {
+            return nil
+        }
+        return stripMatchingQuotes(from: String(line[valueRange]).trimmingCharacters(in: .whitespaces))
     }
 }
 

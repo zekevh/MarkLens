@@ -45,4 +45,22 @@ final class MarkdownEngineTests: XCTestCase {
             URL(string: "https://example.com/image.png")
         )
     }
+
+    func testCodeHighlighterHighlightsYAMLKeysAndKeywords() {
+        let storage = NSTextStorage(string: """
+        title: MarkLens
+        draft: true
+        tags:
+          - notes
+        """)
+
+        let fullRange = NSRange(location: 0, length: storage.length)
+        CodeHighlighter.apply(to: storage, codeRange: fullRange, language: "yaml")
+
+        let titleRange = (storage.string as NSString).range(of: "title")
+        let draftValueRange = (storage.string as NSString).range(of: "true")
+
+        XCTAssertNotNil(storage.attribute(.foregroundColor, at: titleRange.location, effectiveRange: nil))
+        XCTAssertNotNil(storage.attribute(.foregroundColor, at: draftValueRange.location, effectiveRange: nil))
+    }
 }

@@ -10,6 +10,10 @@ enum CodeHighlighter {
 
     static func apply(to storage: NSTextStorage, codeRange: NSRange, language: String) {
         guard codeRange.length > 0 else { return }
+        if ["yaml", "yml"].contains(language) {
+            applyYAMLKeys(storage, codeRange)
+            applyYAMLKeywords(storage, codeRange)
+        }
         applyKeywords(storage, codeRange, language)
         applyNumbers(storage, codeRange)
         applyStrings(storage, codeRange, language)
@@ -20,6 +24,7 @@ enum CodeHighlighter {
 
     private enum Colors {
         static let keyword = NSColor.systemPurple
+        static let property = NSColor.systemRed
         static let string  = NSColor.systemOrange
         static let comment: NSColor = {
             NSColor(name: nil) { appearance in
@@ -70,22 +75,42 @@ enum CodeHighlighter {
         }
     }
 
+    private static func applyYAMLKeys(_ storage: NSTextStorage, _ range: NSRange) {
+        let pattern = #"(?m)^(?:\s*-\s+)?([A-Za-z0-9_.-]+)(?=\s*:)"#
+        run(pattern, storage, range, Colors.property, matchGroup: 1)
+    }
+
+    private static func applyYAMLKeywords(_ storage: NSTextStorage, _ range: NSRange) {
+        run(#"\b(true|false|yes|no|on|off|null)\b"#, storage, range, Colors.keyword, options: [.caseInsensitive])
+        run(#"(?m)(?<=:\s)~(?=\s*$)"#, storage, range, Colors.keyword)
+    }
+
     // MARK: - Helpers
 
     @MainActor private static var regexCache: [String: NSRegularExpression] = [:]
 
-    private static func run(_ pattern: String, _ storage: NSTextStorage, _ range: NSRange, _ color: NSColor) {
+    private static func run(
+        _ pattern: String,
+        _ storage: NSTextStorage,
+        _ range: NSRange,
+        _ color: NSColor,
+        options: NSRegularExpression.Options = [],
+        matchGroup: Int = 0
+    ) {
         let regex: NSRegularExpression
-        if let cached = regexCache[pattern] {
+        let cacheKey = "\(options.rawValue):\(pattern)"
+        if let cached = regexCache[cacheKey] {
             regex = cached
         } else {
-            guard let r = try? NSRegularExpression(pattern: pattern) else { return }
-            regexCache[pattern] = r
+            guard let r = try? NSRegularExpression(pattern: pattern, options: options) else { return }
+            regexCache[cacheKey] = r
             regex = r
         }
         regex.enumerateMatches(in: storage.string, range: range) { m, _, _ in
             guard let m else { return }
-            storage.addAttribute(.foregroundColor, value: color, range: m.range)
+            let targetRange = m.range(at: matchGroup)
+            guard targetRange.location != NSNotFound, targetRange.length > 0 else { return }
+            storage.addAttribute(.foregroundColor, value: color, range: targetRange)
         }
     }
 
