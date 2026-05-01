@@ -18,6 +18,7 @@ struct NodeEditorView: View {
     @State private var lastHandledSearchJumpID: UUID? = nil
     @State private var pendingInitialLayoutIDs: Set<UUID> = []
     @State private var isEditorReady = false
+    @State private var suppressProgrammaticSync = false
 
     var body: some View {
         ZStack {
@@ -136,6 +137,7 @@ struct NodeEditorView: View {
             manager.undoManager = um
         }
         .onChange(of: manager.blocks) { oldBlocks, _ in
+            guard !suppressProgrammaticSync else { return }
             let serialized = manager.synchronizeDocument(from: oldBlocks)
             guard serialized != text else { return }
             text = serialized
@@ -158,6 +160,7 @@ struct NodeEditorView: View {
     }
 
     private func loadEditorText(_ newText: String) {
+        suppressProgrammaticSync = true
         isEditorReady = false
         onReadyStateChange(false)
         manager.load(from: newText)
@@ -167,11 +170,15 @@ struct NodeEditorView: View {
         if blockIDs.isEmpty {
             isEditorReady = true
             onReadyStateChange(true)
+            Task { @MainActor in
+                suppressProgrammaticSync = false
+            }
             return
         }
 
         Task { @MainActor in
             await Task.yield()
+            suppressProgrammaticSync = false
             if pendingInitialLayoutIDs.isEmpty {
                 isEditorReady = true
             }

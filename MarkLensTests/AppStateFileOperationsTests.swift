@@ -218,6 +218,39 @@ final class AppStateFileOperationsTests: XCTestCase {
         XCTAssertEqual(appState.workspaceStore.selectedFileBrokenInternalLinkCount, 0)
     }
 
+    func testOpeningAndSwitchingFilesWithoutEditsDoesNotRewriteBlankLines() async throws {
+        let formattedURL = tempDirectoryURL.appendingPathComponent("Formatted.md")
+        let otherURL = tempDirectoryURL.appendingPathComponent("Other.md")
+        let original = """
+        Alpha
+
+
+
+        Beta
+        """
+        try original.write(to: formattedURL, atomically: true, encoding: .utf8)
+        try "Other\n".write(to: otherURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.loadFile(formattedURL)
+
+        try await waitUntil {
+            self.appState.documentStore.selectedFileURL == formattedURL
+        }
+
+        XCTAssertFalse(appState.documentStore.isCurrentDocumentEdited)
+
+        appState.workspaceStore.loadFile(otherURL)
+
+        try await waitUntil {
+            self.appState.documentStore.selectedFileURL == otherURL
+        }
+
+        let persisted = try String(contentsOf: formattedURL, encoding: .utf8)
+        XCTAssertEqual(persisted, original)
+        XCTAssertFalse(appState.documentStore.isCurrentDocumentEdited)
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 10,
         file: StaticString = #filePath,
