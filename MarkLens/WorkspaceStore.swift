@@ -2,6 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import Combine
 
+enum SelectedFileHistoryState: Equatable {
+    case unavailable
+    case loaded([GitFileHistoryEntry])
+    case failed
+}
+
 @MainActor
 final class WorkspaceStore: ObservableObject {
     @Published var rootNodes: [FileNode] = []
@@ -9,6 +15,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var pinnedURLs: Set<String>
     @Published private(set) var gitChanges: [String: GitFileChange] = [:]
     @Published private(set) var gitRepositoryInfo: GitRepositoryInfo? = nil
+    @Published private(set) var isLoadingSelectedFileHistory: Bool = false
+    @Published private(set) var selectedFileHistoryState: SelectedFileHistoryState = .unavailable
 
     let folderWatcher = FolderWatcher()
 
@@ -16,7 +24,9 @@ final class WorkspaceStore: ObservableObject {
     private let fileOperations: WorkspaceFileOperations
     private let persistence: WorkspacePersistence
     private var treeRebuildGeneration = 0
+    private var fileHistoryGeneration = 0
     private var workspaceSnapshot: WorkspaceSnapshot?
+    private var cancellables: Set<AnyCancellable> = []
 
     var rootFolderURL: URL?
 
@@ -29,6 +39,17 @@ final class WorkspaceStore: ObservableObject {
         self.fileOperations = fileOperations
         self.persistence = persistence
         self.pinnedURLs = persistence.loadPinnedURLs()
+
+        documentStore.$selectedFileURL
+            .sink { [weak self] fileURL in
+                self?.refreshSelectedFileHistory(for: fileURL)
+            }
+            .store(in: &cancellables)
+    }
+
+    var selectedFileHasLocalChanges: Bool {
+        guard let selectedFileURL = documentStore.selectedFileURL else { return false }
+        return gitChange(for: selectedFileURL) != nil
     }
 
     func rebuildTree(onComplete: (@MainActor ([FileNode]) -> Void)? = nil) {
@@ -110,10 +131,13 @@ final class WorkspaceStore: ObservableObject {
         documentStore.closeDocument()
         folderWatcher.stopAll()
         treeRebuildGeneration += 1
+        fileHistoryGeneration += 1
         rootFolderURL = nil
         workspaceSnapshot = nil
         gitChanges = [:]
         gitRepositoryInfo = nil
+        isLoadingSelectedFileHistory = false
+        selectedFileHistoryState = .unavailable
         persistence.saveRootFolderURL(nil)
         rootNodes = []
         selectedSidebarURLs = []
@@ -164,6 +188,8 @@ final class WorkspaceStore: ObservableObject {
             self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
             self.gitChanges = [:]
             self.gitRepositoryInfo = nil
+            self.isLoadingSelectedFileHistory = false
+            self.selectedFileHistoryState = .unavailable
             self.documentStore.loadFile(url)
         }
     }
@@ -269,6 +295,8 @@ final class WorkspaceStore: ObservableObject {
                 self.rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
                 self.gitChanges = [:]
                 self.gitRepositoryInfo = nil
+                self.isLoadingSelectedFileHistory = false
+                self.selectedFileHistoryState = .unavailable
                 self.loadFile(url)
             }
             return
@@ -278,6 +306,8 @@ final class WorkspaceStore: ObservableObject {
         rootNodes = [FileNode(url: url, name: url.lastPathComponent, isDirectory: false)]
         gitChanges = [:]
         gitRepositoryInfo = nil
+        isLoadingSelectedFileHistory = false
+        selectedFileHistoryState = .unavailable
         loadFile(url)
     }
 
@@ -466,6 +496,34 @@ final class WorkspaceStore: ObservableObject {
                 "Workspace \(workspaceURL.lastPathComponent) git refresh loaded \(changes.count) changes",
                 category: "Workspace"
             )
+        }
+    }
+
+    private func refreshSelectedFileHistory(for fileURL: URL?) {
+        fileHistoryGeneration += 1
+        let generation = fileHistoryGeneration
+
+        guard let fileURL, !fileURL.hasDirectoryPath else {
+            isLoadingSelectedFileHistory = false
+            selectedFileHistoryState = .unavailable
+            return
+        }
+
+        isLoadingSelectedFileHistory = true
+        selectedFileHistoryState = .unavailable
+
+        Task { @MainActor [weak self] in
+            let history = await GitStatusService.loadHistory(for: fileURL)
+            guard let self else { return }
+            guard self.fileHistoryGeneration == generation else { return }
+            self.isLoadingSelectedFileHistory = false
+
+            guard let history else {
+                self.selectedFileHistoryState = .unavailable
+                return
+            }
+
+            self.selectedFileHistoryState = .loaded(history)
         }
     }
 }

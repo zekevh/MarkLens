@@ -8,6 +8,7 @@ final class MarkLensUITests: XCTestCase {
     private let rootFolderKey = "MARKLENS_UI_TEST_ROOT_FOLDER"
     private let rawModeKey = "MARKLENS_UI_TEST_RAW_MODE"
     private let harnessKey = "MARKLENS_UI_TEST_HARNESS"
+    private let showOutlinePanelKey = "MARKLENS_UI_TEST_SHOW_OUTLINE_PANEL"
     private var tempDirectoryURL: URL!
 
     override func setUpWithError() throws {
@@ -112,6 +113,36 @@ final class MarkLensUITests: XCTestCase {
         XCTAssertEqual(rawEditor(in: app).value as? String, "Disk version from test")
     }
 
+    func testOutlinePanelShowsFileHistoryAndLocalChanges() throws {
+        try initializeGitRepository(at: tempDirectoryURL)
+
+        try "Tracked file\n".write(
+            to: tempDirectoryURL.appendingPathComponent("Tracked.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try commitAll(in: tempDirectoryURL, message: "Add tracked note")
+        try "Dirty file\n".write(
+            to: tempDirectoryURL.appendingPathComponent("Dirty.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let app = XCUIApplication()
+        configureLaunchEnvironment(for: app, rootFolder: tempDirectoryURL, rawMode: true, showOutlinePanel: true)
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["History"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No headings"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Local changes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No commits for this file"].waitForExistence(timeout: 5))
+
+        app.staticTexts["Tracked.md"].click()
+
+        XCTAssertTrue(app.staticTexts["Add tracked note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(identifier: "fileHistoryLocalChanges").count == 0)
+    }
+
     func testColdLaunchBenchmark_rawEditorFirstNote() throws {
         try makeBenchmarkFixture()
         let app = XCUIApplication()
@@ -143,7 +174,12 @@ final class MarkLensUITests: XCTestCase {
         return app
     }
 
-    private func configureLaunchEnvironment(for app: XCUIApplication, rootFolder: URL, rawMode: Bool) {
+    private func configureLaunchEnvironment(
+        for app: XCUIApplication,
+        rootFolder: URL,
+        rawMode: Bool,
+        showOutlinePanel: Bool = false
+    ) {
         terminateRunningMarkLensApps()
         app.launchEnvironment[disableRestoreKey] = "1"
         app.launchEnvironment[rootFolderKey] = rootFolder.path
@@ -153,6 +189,11 @@ final class MarkLensUITests: XCTestCase {
             app.launchEnvironment.removeValue(forKey: rawModeKey)
         }
         app.launchEnvironment[harnessKey] = "1"
+        if showOutlinePanel {
+            app.launchEnvironment[showOutlinePanelKey] = "1"
+        } else {
+            app.launchEnvironment.removeValue(forKey: showOutlinePanelKey)
+        }
     }
 
     private func rawEditor(in app: XCUIApplication) -> XCUIElement {
@@ -205,6 +246,39 @@ final class MarkLensUITests: XCTestCase {
             atomically: true,
             encoding: .utf8
         )
+    }
+
+    private func initializeGitRepository(at url: URL) throws {
+        try runGit(["init"], at: url)
+        try runGit(["config", "user.name", "MarkLens UITests"], at: url)
+        try runGit(["config", "user.email", "ui-tests@example.com"], at: url)
+    }
+
+    private func commitAll(in url: URL, message: String) throws {
+        try runGit(["add", "-A"], at: url)
+        try runGit(["commit", "-m", message], at: url)
+    }
+
+    private func runGit(_ arguments: [String], at url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.currentDirectoryURL = url
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let data = stderr.fileHandleForReading.readDataToEndOfFile()
+            let error = String(data: data, encoding: .utf8) ?? "Unknown git error"
+            XCTFail("git \(arguments.joined(separator: " ")) failed: \(error)")
+            return
+        }
     }
 
     private func formatMilliseconds(_ duration: Duration) -> String {

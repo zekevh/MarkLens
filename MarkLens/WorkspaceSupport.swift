@@ -157,6 +157,15 @@ enum GitFileChange: Equatable {
     case modified
 }
 
+struct GitFileHistoryEntry: Identifiable, Equatable {
+    let fullHash: String
+    let shortHash: String
+    let subject: String
+    let authorDate: Date
+
+    var id: String { fullHash }
+}
+
 struct GitDiffSummary: Equatable {
     let added: Int
     let deleted: Int
@@ -171,6 +180,7 @@ struct GitRepositoryInfo: Equatable {
 enum GitStatusService {
     nonisolated private static let preferredGitExecutablePath = "/Library/Developer/CommandLineTools/usr/bin/git"
     nonisolated private static let fallbackGitExecutablePath = "/usr/bin/git"
+    nonisolated private static let historyFieldSeparator = "\u{1F}"
 
     nonisolated static func loadChanges(for workspaceURL: URL) async -> [String: GitFileChange] {
         await Task.detached(priority: .utility) {
@@ -181,6 +191,12 @@ enum GitStatusService {
     nonisolated static func loadRepositoryInfo(for workspaceURL: URL) async -> GitRepositoryInfo? {
         await Task.detached(priority: .utility) {
             loadRepositoryInfoSync(for: workspaceURL)
+        }.value
+    }
+
+    nonisolated static func loadHistory(for fileURL: URL) async -> [GitFileHistoryEntry]? {
+        await Task.detached(priority: .utility) {
+            loadHistorySync(for: fileURL)
         }.value
     }
 
@@ -278,6 +294,30 @@ enum GitStatusService {
         )
     }
 
+    nonisolated private static func loadHistorySync(for fileURL: URL) -> [GitFileHistoryEntry]? {
+        guard let gitRoot = gitRoot(for: fileURL) else {
+            AppLogger.debug("No git root for file history \(fileURL.path)", category: "Git")
+            return nil
+        }
+
+        let standardizedFileURL = fileURL.standardizedFileURL
+        guard standardizedFileURL.path.hasPrefix(gitRoot.standardizedFileURL.path + "/") else {
+            AppLogger.error("File \(fileURL.path) is not inside git root \(gitRoot.path)", category: "Git")
+            return []
+        }
+
+        let relativePath = String(standardizedFileURL.path.dropFirst(gitRoot.standardizedFileURL.path.count + 1))
+        let format = "%H\(historyFieldSeparator)%h\(historyFieldSeparator)%ct\(historyFieldSeparator)%s"
+        let arguments = ["log", "--follow", "--format=\(format)", "--", relativePath]
+        let output = runGitCommand(arguments, at: gitRoot) ?? ""
+        let entries = parseFileHistory(output)
+        AppLogger.info(
+            "Loaded \(entries.count) history entries for \(relativePath) in \(gitRoot.lastPathComponent)",
+            category: "Git"
+        )
+        return entries
+    }
+
     nonisolated private static func loadDiffSummary(at gitRoot: URL) -> GitDiffSummary {
         let unstaged = parseNumstat(runGitCommand(["diff", "--numstat"], at: gitRoot))
         let staged = parseNumstat(runGitCommand(["diff", "--cached", "--numstat"], at: gitRoot))
@@ -307,6 +347,27 @@ enum GitStatusService {
         }
 
         return GitDiffSummary(added: added, deleted: deleted)
+    }
+
+    nonisolated static func parseFileHistory(_ output: String) -> [GitFileHistoryEntry] {
+        guard !output.isEmpty else { return [] }
+
+        return output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line in
+                let columns = line.split(
+                    separator: Character(historyFieldSeparator),
+                    omittingEmptySubsequences: false
+                )
+                guard columns.count >= 4 else { return nil }
+                guard let timestamp = TimeInterval(columns[2]) else { return nil }
+                return GitFileHistoryEntry(
+                    fullHash: String(columns[0]),
+                    shortHash: String(columns[1]),
+                    subject: String(columns[3]),
+                    authorDate: Date(timeIntervalSince1970: timestamp)
+                )
+            }
     }
 
     nonisolated private static func runGitCommand(_ arguments: [String], at gitRoot: URL) -> String? {

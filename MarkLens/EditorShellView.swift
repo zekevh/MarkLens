@@ -17,6 +17,9 @@ struct MainEditorShell: View {
 
                 OutlinePanelView(
                     entries: editorUIStore.outlineEntries,
+                    historyState: workspaceStore.selectedFileHistoryState,
+                    isLoadingHistory: workspaceStore.isLoadingSelectedFileHistory,
+                    hasLocalChanges: workspaceStore.selectedFileHasLocalChanges,
                     onSelectEntry: { editorUIStore.jumpToOutlineEntry($0) }
                 )
                 .frame(width: CGFloat(outlinePanelWidth))

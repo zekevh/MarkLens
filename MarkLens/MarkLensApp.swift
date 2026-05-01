@@ -7,6 +7,7 @@ enum UITestLaunchEnvironment {
     static let rootFolder = "MARKLENS_UI_TEST_ROOT_FOLDER"
     static let rawMode = "MARKLENS_UI_TEST_RAW_MODE"
     static let harness = "MARKLENS_UI_TEST_HARNESS"
+    static let showOutlinePanel = "MARKLENS_UI_TEST_SHOW_OUTLINE_PANEL"
 }
 
 // MARK: - AppState
@@ -246,6 +247,9 @@ private struct WindowView: View {
                 }
                 if environment[UITestLaunchEnvironment.rawMode] == "1" {
                     appState.documentStore.isRawMode = true
+                }
+                if environment[UITestLaunchEnvironment.showOutlinePanel] == "1" {
+                    appState.editorUIStore.isOutlinePanelVisible = true
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .marklensOpenNewWindow)) { _ in

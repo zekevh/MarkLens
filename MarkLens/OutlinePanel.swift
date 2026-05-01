@@ -68,40 +68,76 @@ func parseOutlineEntries(from text: String) -> [OutlineEntry] {
 
 struct OutlinePanelView: View {
     let entries: [OutlineEntry]
+    let historyState: SelectedFileHistoryState
+    let isLoadingHistory: Bool
+    let hasLocalChanges: Bool
     let onSelectEntry: (OutlineEntry) -> Void
 
-    @State private var selectedID: UUID? = nil
-
     var body: some View {
-        Group {
-            if entries.isEmpty {
-                List {
-                    Section("Outline") {
-                        Text("No headings")
-                            .foregroundStyle(.tertiary)
-                            .font(.callout)
-                    }
-                }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-            } else {
-                List(selection: $selectedID) {
-                    Section("Outline") {
-                        ForEach(entries) { entry in
+        List {
+            Section("Outline") {
+                if entries.isEmpty {
+                    Text("No headings")
+                        .foregroundStyle(.tertiary)
+                        .font(.callout)
+                } else {
+                    ForEach(entries) { entry in
+                        Button {
+                            onSelectEntry(entry)
+                        } label: {
                             OutlineEntryRow(entry: entry)
-                                .tag(entry.id)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
             }
+
+            Section("History") {
+                historySectionContent
+            }
+            .accessibilityIdentifier("fileHistorySection")
         }
-        .onChange(of: selectedID) { _, newID in
-            guard let newID,
-                  let entry = entries.first(where: { $0.id == newID }) else { return }
-            onSelectEntry(entry)
-            Task { @MainActor in selectedID = nil }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+    }
+
+    @ViewBuilder
+    private var historySectionContent: some View {
+        if hasLocalChanges {
+            LocalChangesRow()
+                .accessibilityIdentifier("fileHistoryLocalChanges")
+        }
+
+        if isLoadingHistory {
+            Text("Loading history…")
+                .foregroundStyle(.tertiary)
+                .font(.callout)
+                .accessibilityIdentifier("fileHistoryLoading")
+        } else {
+            switch historyState {
+            case .unavailable:
+                Text("Not in a git repository")
+                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                    .accessibilityIdentifier("fileHistoryUnavailable")
+            case .failed:
+                Text("Could not load history")
+                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                    .accessibilityIdentifier("fileHistoryError")
+            case let .loaded(entries):
+                if entries.isEmpty {
+                    Text("No commits for this file")
+                        .foregroundStyle(.tertiary)
+                        .font(.callout)
+                        .accessibilityIdentifier("fileHistoryEmpty")
+                } else {
+                    ForEach(entries) { entry in
+                        FileHistoryRow(entry: entry)
+                            .accessibilityIdentifier("fileHistoryRow-\(entry.shortHash)")
+                    }
+                }
+            }
         }
     }
 }
@@ -123,5 +159,43 @@ private struct OutlineEntryRow: View {
         case 2:  return .system(size: 11, weight: .medium)
         default: return .system(size: 11, weight: .regular)
         }
+    }
+}
+
+private struct LocalChangesRow: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 7))
+                .foregroundStyle(.orange)
+            Text("Local changes")
+                .font(.system(size: 11, weight: .medium))
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct FileHistoryRow: View {
+    let entry: GitFileHistoryEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(entry.subject)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(2)
+                .foregroundStyle(.primary)
+
+            HStack(spacing: 6) {
+                Text(entry.shortHash)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Text(entry.authorDate, format: .dateTime.year().month(.abbreviated).day())
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 1)
     }
 }
