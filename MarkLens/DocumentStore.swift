@@ -169,7 +169,7 @@ final class DocumentStore: ObservableObject {
         guard let base = selectedFileURL?.deletingLastPathComponent() else { return nil }
         let pathPart = urlString.components(separatedBy: CharacterSet(charactersIn: "#?")).first ?? urlString
         guard !pathPart.isEmpty else { return nil }
-        let resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: base).standardized
+        let resolvedURL = URL(fileURLWithPath: pathPart, relativeTo: base).standardizedFileURL
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else { return nil }
         return resolvedURL
     }

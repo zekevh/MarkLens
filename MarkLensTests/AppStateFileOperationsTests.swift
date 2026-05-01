@@ -133,4 +133,73 @@ final class AppStateFileOperationsTests: XCTestCase {
         XCTAssertEqual(appState.documentStore.selectedFileURL, secondURL)
         XCTAssertEqual(appState.workspaceStore.selectedSidebarURLs, [secondURL])
     }
+
+    func testBrokenLinkHealthTracksExternalRenameWithoutRewriting() async throws {
+        let sourceURL = tempDirectoryURL.appendingPathComponent("Source.md")
+        let targetURL = tempDirectoryURL.appendingPathComponent("Target.md")
+        try "[go](./Target.md)\n".write(to: sourceURL, atomically: true, encoding: .utf8)
+        try "target\n".write(to: targetURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.loadFile(sourceURL)
+        appState.workspaceStore.rebuildTree()
+
+        try await waitUntil {
+            self.appState.workspaceStore.brokenInternalLinkCount(for: sourceURL) == 0
+        }
+
+        let renamedURL = tempDirectoryURL.appendingPathComponent("Renamed.md")
+        try FileManager.default.moveItem(at: targetURL, to: renamedURL)
+        appState.workspaceStore.rebuildTree()
+
+        try await waitUntil {
+            self.appState.workspaceStore.brokenInternalLinkCount(for: sourceURL) == 1
+        }
+
+        let sourceContents = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertEqual(sourceContents, "[go](./Target.md)\n")
+    }
+
+    func testBrokenLinkHealthClearsAfterManualFixAndUnsavedEditsUpdateSelectedFileState() async throws {
+        let sourceURL = tempDirectoryURL.appendingPathComponent("Source.md")
+        try "[missing](./Missing.md)\n".write(to: sourceURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.loadFile(sourceURL)
+        appState.workspaceStore.rebuildTree()
+
+        try await waitUntil {
+            self.appState.workspaceStore.selectedFileBrokenInternalLinkCount == 1
+        }
+
+        let fixedTargetURL = tempDirectoryURL.appendingPathComponent("Missing.md")
+        try "fixed\n".write(to: fixedTargetURL, atomically: true, encoding: .utf8)
+        appState.workspaceStore.rebuildTree()
+
+        try await waitUntil {
+            self.appState.workspaceStore.brokenInternalLinkCount(for: sourceURL) == 0
+        }
+
+        appState.documentStore.saveCurrentFile(text: "[missing](./StillMissing.md)\n")
+
+        try await waitUntil {
+            self.appState.workspaceStore.selectedFileBrokenInternalLinkCount == 1
+        }
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTFail("Condition timed out", file: file, line: line)
+    }
 }

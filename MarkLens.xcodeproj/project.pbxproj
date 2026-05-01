@@ -11,6 +11,7 @@
 		1E4950C2C1D64FBAAA7D35A4 /* MarkLensUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4D389EBB6A410A974F6A62 /* MarkLensUITests.swift */; };
 		21C976866C54445988A434AB /* AppStateTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */; };
 		3CF1B52861434DDA8D45EC16 /* AppStateFileOperationsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1CA348E29E412A890E8C56 /* AppStateFileOperationsTests.swift */; };
+		3E9A7A2057814E8C85D25D42 /* WorkspaceBrokenLinkScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B210D0F4ED48319BDA7468 /* WorkspaceBrokenLinkScannerTests.swift */; };
 		40A0DF5726E047F4B1EE5D19 /* PerformanceBenchmarksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2867E7C836094D719784D33B /* PerformanceBenchmarksTests.swift */; };
 		6F097C92752F4C42B787D04A /* BlocksManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */; };
 		86D902E7E1AA41F094D958A4 /* QuickOpenStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31829919DD114486BC4E0D4F /* QuickOpenStoreTests.swift */; };
@@ -50,6 +51,7 @@
 		CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlocksManagerTests.swift; sourceTree = "<group>"; };
 		D1A57DB1822044E680DFF976 /* AppStateSearchReplaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateSearchReplaceTests.swift; sourceTree = "<group>"; };
 		E84F6B0DAAE940EEAEC5F3F9 /* MarkLensUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MarkLensUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0B210D0F4ED48319BDA7468 /* WorkspaceBrokenLinkScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceBrokenLinkScannerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -131,6 +133,7 @@
 				75A292B2CCAB4355B1F85CD2 /* AppStateTreeTests.swift */,
 				CA88A6B174734F0DB2D3C85E /* BlocksManagerTests.swift */,
 				AA000A012F72D7B1004D4F68 /* MarkdownParserTests.swift */,
+				F0B210D0F4ED48319BDA7468 /* WorkspaceBrokenLinkScannerTests.swift */,
 			);
 			path = MarkLensTests;
 			sourceTree = "<group>";
@@ -302,6 +305,7 @@
 				B6FE30B56F514D20BD26AE3F /* AppStateSearchReplaceTests.swift in Sources */,
 				0A4A3F5A2C11411B93C19FD1 /* MarkdownEngineTests.swift in Sources */,
 				AA000A022F72D7B1004D4F68 /* MarkdownParserTests.swift in Sources */,
+				3E9A7A2057814E8C85D25D42 /* WorkspaceBrokenLinkScannerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -4,6 +4,7 @@ struct EditorStatusBar: View {
     let fileURL: URL
     let rootFolderURL: URL?
     let text: String
+    let brokenInternalLinkCount: Int
     let showsPathBar: Bool
     let showsStatusBar: Bool
 
@@ -63,6 +64,10 @@ struct EditorStatusBar: View {
             if showsStatusBar {
                 HStack(spacing: 14) {
                     Spacer(minLength: 0)
+                    if brokenInternalLinkCount > 0 {
+                        Label("Broken links: \(brokenInternalLinkCount)", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                     Text("\(wordCount) \(wordCount == 1 ? "word" : "words")")
                     Text("\(estimatedTokenCount) est. AI tokens")
                     Spacer(minLength: 0)

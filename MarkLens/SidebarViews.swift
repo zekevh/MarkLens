@@ -259,6 +259,9 @@ struct SidebarRow: View {
                         .foregroundStyle(.orange)
                         .fixedSize()
                 }
+                if !node.isDirectory, workspaceStore.brokenInternalLinkCount(for: node.url) > 0 {
+                    BrokenLinkBadge(count: workspaceStore.brokenInternalLinkCount(for: node.url))
+                }
                 if !node.isDirectory, let gitChange = workspaceStore.gitChange(for: node.url) {
                     GitChangeBadge(change: gitChange)
                 }
@@ -300,6 +303,25 @@ private struct GitChangeBadge: View {
             .background(tint.opacity(0.12), in: Capsule())
             .fixedSize()
             .accessibilityLabel(change == .new ? "New file" : "Modified file")
+    }
+}
+
+private struct BrokenLinkBadge: View {
+    let count: Int
+
+    var body: some View {
+        Label("\(count)", systemImage: "exclamationmark.triangle.fill")
+            .labelStyle(.iconOnly)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.orange)
+            .overlay(alignment: .topTrailing) {
+                Text("\(count)")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.orange)
+                    .offset(x: 5, y: -4)
+            }
+            .fixedSize()
+            .accessibilityLabel("\(count) broken internal \(count == 1 ? "link" : "links")")
     }
 }
 

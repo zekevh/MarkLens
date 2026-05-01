@@ -45,6 +45,7 @@ struct MainEditorShell: View {
                     fileURL: selectedFileURL,
                     rootFolderURL: workspaceStore.rootFolderURL,
                     text: documentStore.documentText,
+                    brokenInternalLinkCount: workspaceStore.selectedFileBrokenInternalLinkCount,
                     showsPathBar: editorUIStore.isPathBarVisible,
                     showsStatusBar: editorUIStore.isStatusBarVisible
                 )

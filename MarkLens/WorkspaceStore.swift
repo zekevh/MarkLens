@@ -17,6 +17,7 @@ final class WorkspaceStore: ObservableObject {
     @Published private(set) var gitRepositoryInfo: GitRepositoryInfo? = nil
     @Published private(set) var isLoadingSelectedFileHistory: Bool = false
     @Published private(set) var selectedFileHistoryState: SelectedFileHistoryState = .unavailable
+    @Published private(set) var brokenInternalLinkCounts: [String: Int] = [:]
 
     let folderWatcher = FolderWatcher()
 
@@ -25,6 +26,7 @@ final class WorkspaceStore: ObservableObject {
     private let persistence: WorkspacePersistence
     private var treeRebuildGeneration = 0
     private var fileHistoryGeneration = 0
+    private var linkHealthGeneration = 0
     private var workspaceSnapshot: WorkspaceSnapshot?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -43,6 +45,13 @@ final class WorkspaceStore: ObservableObject {
         documentStore.$selectedFileURL
             .sink { [weak self] fileURL in
                 self?.refreshSelectedFileHistory(for: fileURL)
+                self?.refreshSelectedFileLinkHealth()
+            }
+            .store(in: &cancellables)
+
+        documentStore.$documentText
+            .sink { [weak self] _ in
+                self?.refreshSelectedFileLinkHealth()
             }
             .store(in: &cancellables)
     }
@@ -50,6 +59,15 @@ final class WorkspaceStore: ObservableObject {
     var selectedFileHasLocalChanges: Bool {
         guard let selectedFileURL = documentStore.selectedFileURL else { return false }
         return gitChange(for: selectedFileURL) != nil
+    }
+
+    var selectedFileBrokenInternalLinkCount: Int {
+        guard let selectedFileURL = documentStore.selectedFileURL else { return 0 }
+        return brokenInternalLinkCount(for: selectedFileURL)
+    }
+
+    var selectedFileHasBrokenInternalLinks: Bool {
+        selectedFileBrokenInternalLinkCount > 0
     }
 
     func rebuildTree(onComplete: (@MainActor ([FileNode]) -> Void)? = nil) {
@@ -67,6 +85,7 @@ final class WorkspaceStore: ObservableObject {
             self.rootNodes = snapshot.nodes
             self.applyFolderWatch(snapshot)
             self.refreshGitChanges(for: snapshot.rootFolder, generation: generation)
+            self.refreshWorkspaceBrokenLinkHealth()
             onComplete?(snapshot.nodes)
         }
     }
@@ -142,6 +161,7 @@ final class WorkspaceStore: ObservableObject {
         gitRepositoryInfo = nil
         isLoadingSelectedFileHistory = false
         selectedFileHistoryState = .unavailable
+        brokenInternalLinkCounts = [:]
         persistence.saveRootFolderURL(nil)
         rootNodes = []
         selectedSidebarURLs = []
@@ -194,6 +214,7 @@ final class WorkspaceStore: ObservableObject {
             self.gitRepositoryInfo = nil
             self.isLoadingSelectedFileHistory = false
             self.selectedFileHistoryState = .unavailable
+            self.brokenInternalLinkCounts = [:]
             self.documentStore.loadFile(url)
         }
     }
@@ -303,6 +324,7 @@ final class WorkspaceStore: ObservableObject {
                 self.gitRepositoryInfo = nil
                 self.isLoadingSelectedFileHistory = false
                 self.selectedFileHistoryState = .unavailable
+                self.brokenInternalLinkCounts = [:]
                 self.loadFile(url)
             }
             return
@@ -314,6 +336,7 @@ final class WorkspaceStore: ObservableObject {
         gitRepositoryInfo = nil
         isLoadingSelectedFileHistory = false
         selectedFileHistoryState = .unavailable
+        brokenInternalLinkCounts = [:]
         loadFile(url)
     }
 
@@ -350,11 +373,16 @@ final class WorkspaceStore: ObservableObject {
             self.rootNodes = refreshedSnapshot.nodes
             self.applyFolderWatch(refreshedSnapshot)
             self.refreshGitChanges(for: rootFolderURL, generation: generation)
+            self.refreshWorkspaceBrokenLinkHealth()
         }
     }
 
     func gitChange(for url: URL) -> GitFileChange? {
         gitChanges[url.standardizedFileURL.path]
+    }
+
+    func brokenInternalLinkCount(for url: URL) -> Int {
+        brokenInternalLinkCounts[url.standardizedFileURL.path] ?? 0
     }
 
     private func preferredSidebarFileSelection(oldSelection: Set<URL>, newSelection: Set<URL>) -> URL? {
@@ -556,6 +584,69 @@ final class WorkspaceStore: ObservableObject {
                 category: "Workspace"
             )
         }
+    }
+
+    private func refreshWorkspaceBrokenLinkHealth() {
+        guard let workspaceURL = rootFolderURL else {
+            brokenInternalLinkCounts = [:]
+            return
+        }
+
+        linkHealthGeneration += 1
+        let generation = linkHealthGeneration
+        let inMemoryContents = selectedFileInWorkspaceContents()
+
+        Task { @MainActor [weak self] in
+            let report = await Task.detached(priority: .utility) {
+                WorkspaceBrokenLinkScanner.scanWorkspace(
+                    inWorkspace: workspaceURL,
+                    inMemoryContents: inMemoryContents
+                )
+            }.value
+            guard let self else { return }
+            guard self.linkHealthGeneration == generation, self.rootFolderURL == workspaceURL else { return }
+            self.brokenInternalLinkCounts = Dictionary(
+                uniqueKeysWithValues: report.brokenLinkCountsByFile.map { ($0.key.path, $0.value) }
+            )
+
+            if !report.errors.isEmpty {
+                AppLogger.error(
+                    "Workspace broken-link scan skipped \(report.errors.count) file(s): \(report.errors.joined(separator: " | "))",
+                    category: "Workspace"
+                )
+            }
+        }
+    }
+
+    private func refreshSelectedFileLinkHealth() {
+        guard let selectedFileURL = documentStore.selectedFileURL else { return }
+        guard isSelectedFileInsideWorkspace(selectedFileURL) else {
+            brokenInternalLinkCounts.removeValue(forKey: selectedFileURL.standardizedFileURL.path)
+            return
+        }
+
+        let brokenLinkCount = WorkspaceBrokenLinkScanner.scanFile(documentStore.documentText, at: selectedFileURL)
+        let key = selectedFileURL.standardizedFileURL.path
+        if brokenLinkCount > 0 {
+            brokenInternalLinkCounts[key] = brokenLinkCount
+        } else {
+            brokenInternalLinkCounts.removeValue(forKey: key)
+        }
+    }
+
+    private func isSelectedFileInsideWorkspace(_ fileURL: URL) -> Bool {
+        guard let rootFolderURL else { return false }
+        let workspacePath = rootFolderURL.standardizedFileURL.path
+        let filePath = fileURL.standardizedFileURL.path
+        return filePath == workspacePath || filePath.hasPrefix(workspacePath + "/")
+    }
+
+    private func selectedFileInWorkspaceContents() -> [URL: String] {
+        guard let selectedFileURL = documentStore.selectedFileURL,
+              isSelectedFileInsideWorkspace(selectedFileURL) else {
+            return [:]
+        }
+        return [selectedFileURL.standardizedFileURL: documentStore.documentText]
     }
 
     private func refreshSelectedFileHistory(for fileURL: URL?) {
