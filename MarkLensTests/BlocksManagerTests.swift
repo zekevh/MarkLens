@@ -108,6 +108,30 @@ final class BlocksManagerTests: XCTestCase {
         XCTAssertEqual(manager.blocks[0].content, SlashCommandCatalog.starterCodeBlockTemplate)
     }
 
+    func testApplyHeadingSlashCommandReplacesCurrentBlock() {
+        let manager = BlocksManager()
+        let source = MarkdownBlock(content: "/h1")
+        manager.blocks = [source]
+
+        manager.applySlashCommand(.heading1, to: source.id)
+
+        XCTAssertEqual(manager.blocks.count, 1)
+        XCTAssertEqual(manager.blocks[0].kind, .heading(level: 1))
+        XCTAssertEqual(manager.blocks[0].content, SlashCommandCatalog.starterHeading1Template)
+    }
+
+    func testApplyTableSlashCommandReplacesCurrentBlock() {
+        let manager = BlocksManager()
+        let source = MarkdownBlock(content: "/table")
+        manager.blocks = [source]
+
+        manager.applySlashCommand(.table, to: source.id)
+
+        XCTAssertEqual(manager.blocks.count, 1)
+        XCTAssertEqual(manager.blocks[0].kind, .table)
+        XCTAssertEqual(manager.blocks[0].content, SlashCommandCatalog.starterTableTemplate)
+    }
+
     func testApplyFrontMatterSlashCommandMovesBlockToTop() {
         let manager = BlocksManager()
         let first = MarkdownBlock(content: "Intro")
@@ -131,5 +155,7 @@ final class BlocksManagerTests: XCTestCase {
 
         XCTAssertFalse(commands.contains(where: { $0.id == .frontMatter }))
         XCTAssertTrue(commands.contains(where: { $0.id == .codeBlock }))
+        XCTAssertTrue(commands.contains(where: { $0.id == .heading1 }))
+        XCTAssertTrue(commands.contains(where: { $0.id == .table }))
     }
 }

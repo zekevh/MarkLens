@@ -10,6 +10,16 @@ enum CursorPlacement {
 
 enum SlashCommandID: String, CaseIterable, Identifiable {
     case frontMatter
+    case heading1
+    case heading2
+    case heading3
+    case bulletList
+    case numberedList
+    case todoList
+    case blockquote
+    case divider
+    case table
+    case image
     case codeBlock
 
     var id: String { rawValue }
@@ -37,12 +47,87 @@ enum SlashCommandCatalog {
     ```
     """
 
+    static let starterHeading1Template = "# "
+    static let starterHeading2Template = "## "
+    static let starterHeading3Template = "### "
+    static let starterBulletListTemplate = "- "
+    static let starterNumberedListTemplate = "1. "
+    static let starterTodoListTemplate = "- [ ] "
+    static let starterBlockquoteTemplate = "> "
+    static let starterDividerTemplate = "---"
+    static let starterTableTemplate = """
+    | Column 1 | Column 2 |
+    | --- | --- |
+    |  |  |
+    """
+    static let starterImageTemplate = "![Alt text](path/to/image.png)"
+
     static let items: [SlashCommandItem] = [
         SlashCommandItem(
             id: .frontMatter,
             title: "Front Matter",
             subtitle: "Insert title, description, and tags",
             keywords: ["yaml", "meta", "metadata", "frontmatter"]
+        ),
+        SlashCommandItem(
+            id: .heading1,
+            title: "Heading 1",
+            subtitle: "Large section heading",
+            keywords: ["h1", "title", "header", "heading"]
+        ),
+        SlashCommandItem(
+            id: .heading2,
+            title: "Heading 2",
+            subtitle: "Medium section heading",
+            keywords: ["h2", "subtitle", "header", "heading"]
+        ),
+        SlashCommandItem(
+            id: .heading3,
+            title: "Heading 3",
+            subtitle: "Small section heading",
+            keywords: ["h3", "subheading", "header", "heading"]
+        ),
+        SlashCommandItem(
+            id: .bulletList,
+            title: "Bulleted List",
+            subtitle: "Start an unordered list",
+            keywords: ["bullet", "list", "ul", "unordered"]
+        ),
+        SlashCommandItem(
+            id: .numberedList,
+            title: "Numbered List",
+            subtitle: "Start an ordered list",
+            keywords: ["numbered", "ordered", "list", "ol"]
+        ),
+        SlashCommandItem(
+            id: .todoList,
+            title: "To-do List",
+            subtitle: "Start a task list item",
+            keywords: ["todo", "task", "checkbox", "checklist"]
+        ),
+        SlashCommandItem(
+            id: .blockquote,
+            title: "Quote",
+            subtitle: "Insert a block quote",
+            keywords: ["quote", "blockquote", "cite"]
+        ),
+        SlashCommandItem(
+            id: .divider,
+            title: "Divider",
+            subtitle: "Insert a thematic break",
+            keywords: ["divider", "rule", "separator", "hr"]
+        ),
+        SlashCommandItem(
+            id: .table,
+            title: "Table",
+            subtitle: "Insert a 2-column markdown table",
+            keywords: ["table", "grid", "columns"]
+        ),
+        SlashCommandItem(
+            id: .image,
+            title: "Image",
+            subtitle: "Insert markdown image syntax",
+            keywords: ["image", "photo", "media", "picture"]
         ),
         SlashCommandItem(
             id: .codeBlock,
@@ -60,6 +145,26 @@ enum SlashCommandCatalog {
         switch id {
         case .frontMatter:
             return .position(("---\ntitle: " as NSString).length)
+        case .heading1:
+            return .position((starterHeading1Template as NSString).length)
+        case .heading2:
+            return .position((starterHeading2Template as NSString).length)
+        case .heading3:
+            return .position((starterHeading3Template as NSString).length)
+        case .bulletList:
+            return .position((starterBulletListTemplate as NSString).length)
+        case .numberedList:
+            return .position((starterNumberedListTemplate as NSString).length)
+        case .todoList:
+            return .position((starterTodoListTemplate as NSString).length)
+        case .blockquote:
+            return .position((starterBlockquoteTemplate as NSString).length)
+        case .divider:
+            return .end
+        case .table:
+            return .position(("| Column 1 | Column 2 |\n| --- | --- |\n| " as NSString).length)
+        case .image:
+            return .position(("![" as NSString).length)
         case .codeBlock:
             return .position(("```\n" as NSString).length)
         }
@@ -69,8 +174,55 @@ enum SlashCommandCatalog {
         switch id {
         case .frontMatter:
             return starterFrontMatterTemplate
+        case .heading1:
+            return starterHeading1Template
+        case .heading2:
+            return starterHeading2Template
+        case .heading3:
+            return starterHeading3Template
+        case .bulletList:
+            return starterBulletListTemplate
+        case .numberedList:
+            return starterNumberedListTemplate
+        case .todoList:
+            return starterTodoListTemplate
+        case .blockquote:
+            return starterBlockquoteTemplate
+        case .divider:
+            return starterDividerTemplate
+        case .table:
+            return starterTableTemplate
+        case .image:
+            return starterImageTemplate
         case .codeBlock:
             return starterCodeBlockTemplate
+        }
+    }
+
+    static func blockKind(for id: SlashCommandID) -> MarkdownBlockKind {
+        switch id {
+        case .frontMatter:
+            return .frontMatter
+        case .heading1:
+            return .heading(level: 1)
+        case .heading2:
+            return .heading(level: 2)
+        case .heading3:
+            return .heading(level: 3)
+        case .bulletList, .numberedList:
+            return .listItem(task: false)
+        case .todoList:
+            return .listItem(task: true)
+        case .blockquote:
+            return .blockquote
+        case .divider:
+            return .thematicBreak
+        case .table:
+            return .table
+        case .image:
+            return .imageBlock(ImageInfo(alt: "Alt text", destination: "path/to/image.png", title: nil))
+        case .codeBlock:
+            return .codeFence(language: nil)
         }
     }
 }
@@ -288,7 +440,7 @@ final class BlocksManager: ObservableObject {
         let originalFocusID = sourceID
         let replacement = MarkdownBlock(
             id: sourceID,
-            kind: commandID == .frontMatter ? .frontMatter : .codeFence(language: nil),
+            kind: SlashCommandCatalog.blockKind(for: commandID),
             content: SlashCommandCatalog.template(for: commandID)
         )
         let desiredFocus = SlashCommandCatalog.cursorPlacement(for: commandID)

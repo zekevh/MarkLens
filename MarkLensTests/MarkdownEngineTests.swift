@@ -84,6 +84,27 @@ final class MarkdownEngineTests: XCTestCase {
         )
     }
 
+    func testSlashCommandHeadingTemplateClassifiesAsHeading() {
+        XCTAssertEqual(
+            MarkdownEngine.classifyBlockSource(SlashCommandCatalog.starterHeading2Template + "Section"),
+            .heading(level: 2)
+        )
+    }
+
+    func testSlashCommandTableTemplateClassifiesAsTable() {
+        XCTAssertEqual(
+            MarkdownEngine.classifyBlockSource(SlashCommandCatalog.starterTableTemplate),
+            .table
+        )
+    }
+
+    func testSlashCommandImageTemplateClassifiesAsImageBlock() {
+        XCTAssertEqual(
+            MarkdownEngine.classifyBlockSource(SlashCommandCatalog.starterImageTemplate),
+            .imageBlock(ImageInfo(alt: "Alt text", destination: "path/to/image.png", title: nil))
+        )
+    }
+
     func testSerializeBlocksKeepsFrontMatterAheadOfBody() {
         let blocks = [
             MarkdownBlock(kind: .paragraph, content: "Body"),

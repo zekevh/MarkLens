@@ -380,6 +380,22 @@ private struct SlashCommandMenu: View {
         switch commandID {
         case .frontMatter:
             return "doc.text"
+        case .heading1, .heading2, .heading3:
+            return "textformat.size"
+        case .bulletList:
+            return "list.bullet"
+        case .numberedList:
+            return "list.number"
+        case .todoList:
+            return "checklist"
+        case .blockquote:
+            return "text.quote"
+        case .divider:
+            return "minus"
+        case .table:
+            return "tablecells"
+        case .image:
+            return "photo"
         case .codeBlock:
             return "chevron.left.forwardslash.chevron.right"
         }
