@@ -34,6 +34,8 @@ struct MarkdownDocumentModel {
 }
 
 enum MarkdownEngine {
+    private static let atxHeadingPattern = try! NSRegularExpression(pattern: #"^#{1,6}\s+"#)
+
     static func classifyBlockSource(_ source: String, isFirstBlock: Bool = false) -> MarkdownBlockKind {
         classifyBlock(source, isFirstBlock: isFirstBlock)
     }
@@ -107,6 +109,7 @@ enum MarkdownEngine {
 
         switch child {
         case let heading as Heading:
+            guard matchesATXHeadingSyntax(source) else { return .paragraph }
             return .heading(level: heading.level)
         case is BlockQuote:
             return .blockquote
@@ -160,6 +163,13 @@ enum MarkdownEngine {
         let lines = normalized.components(separatedBy: "\n")
         guard lines.count > 1 else { return false }
         return lines.dropFirst().contains(where: { $0 == "---" || $0 == "..." })
+    }
+
+    private static func matchesATXHeadingSyntax(_ source: String) -> Bool {
+        let trimmedLeading = source.trimmingCharacters(in: .newlines)
+        let nsSource = trimmedLeading as NSString
+        let range = NSRange(location: 0, length: nsSource.length)
+        return atxHeadingPattern.firstMatch(in: trimmedLeading, range: range) != nil
     }
 
     private static func splitFrontMatter(from source: String) -> (MarkdownFrontMatter?, String) {

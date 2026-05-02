@@ -57,6 +57,59 @@ private func yamlListContinuationPrefix(from line: String) -> ListContinuationRe
     )
 }
 
+func shouldSplitStructuredBlockOnEnter(
+    kind: MarkdownBlockKind,
+    content: String,
+    selectedRange: NSRange
+) -> Bool {
+    guard selectedRange.length == 0 else { return false }
+    let length = (content as NSString).length
+    guard selectedRange.location == length else { return false }
+
+    switch kind {
+    case .frontMatter:
+        return isCompleteFrontMatterBlock(content)
+    case .codeFence:
+        return isClosedCodeFenceBlock(content)
+    default:
+        return false
+    }
+}
+
+private func isCompleteFrontMatterBlock(_ content: String) -> Bool {
+    let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
+    guard normalized.hasPrefix("---\n") else { return false }
+    let lines = normalized.components(separatedBy: "\n")
+    guard lines.count > 1 else { return false }
+
+    for index in 1..<lines.count {
+        if lines[index] == "---" || lines[index] == "..." {
+            return true
+        }
+    }
+    return false
+}
+
+private func isClosedCodeFenceBlock(_ content: String) -> Bool {
+    let lines = content
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .components(separatedBy: "\n")
+
+    let fenceLines = lines.enumerated().filter { _, line in
+        line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
+    }
+
+    guard fenceLines.count >= 2,
+          let firstFence = fenceLines.first,
+          let lastFence = fenceLines.last,
+          firstFence.offset != lastFence.offset else {
+        return false
+    }
+
+    let trailingNonEmptyLine = lines.last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    return trailingNonEmptyLine?.trimmingCharacters(in: .whitespaces).hasPrefix("```") == true
+}
+
 struct BlockEditorView: NSViewRepresentable {
     var blockID: UUID
     var blockKind: MarkdownBlockKind
@@ -83,6 +136,7 @@ struct BlockEditorView: NSViewRepresentable {
 
         let textView = BlockNSTextView(frame: .zero, textContainer: container)
         textView.blockID = blockID
+        textView.blockKind = blockKind
         textView.registry = registry
         textView.isSlashMenuPresented = isSlashMenuPresented
         textView.onSlashMoveSelection = onSlashMoveSelection
@@ -96,7 +150,16 @@ struct BlockEditorView: NSViewRepresentable {
         let coord = context.coordinator
         textView.onEnter = { [weak coord, weak textView] in
             guard let coord, let tv = textView else { return }
-            if blockKind == .frontMatter {
+            if shouldSplitStructuredBlockOnEnter(
+                kind: tv.blockKind,
+                content: tv.string,
+                selectedRange: tv.selectedRange()
+            ) {
+                splitBlockFromTextView(tv, coordinator: coord)
+                return
+            }
+
+            if tv.blockKind == .frontMatter {
                 let selectedRange = tv.selectedRange()
                 let originalContent = tv.string as NSString
                 let safeLocation = min(selectedRange.location, originalContent.length)
@@ -120,30 +183,7 @@ struct BlockEditorView: NSViewRepresentable {
                 tv.insertNewline(nil)
                 return
             }
-            let loc = tv.selectedRange().location
-            let originalContent = tv.string
-            var newBefore = String(originalContent.prefix(loc))
-            let rawAfter = String(originalContent.suffix(originalContent.count - loc))
-            var newAfter = rawAfter
-            var cursorPos: Int? = nil
-
-            if let lp = listContinuationPrefix(from: newBefore) {
-                if lp.isEmpty {
-                    newBefore = ""
-                } else {
-                    newAfter = lp.prefix + rawAfter
-                    cursorPos = lp.prefix.count
-                }
-            }
-
-            coord.isLoading = true
-            tv.undoManager?.disableUndoRegistration()
-            tv.string = newBefore
-            tv.undoManager?.enableUndoRegistration()
-            coord.isLoading = false
-            coord.onTextChange(newBefore)
-            coord.scheduleHeightUpdate(for: tv)
-            coord.onSplitBlock(originalContent, loc, newBefore, newAfter, cursorPos)
+            splitBlockFromTextView(tv, coordinator: coord)
         }
         textView.onBackspaceAtStart = { [weak coord, weak textView] in
             guard let coord, let tv = textView else { return }
@@ -190,6 +230,8 @@ struct BlockEditorView: NSViewRepresentable {
         context.coordinator.onNavigatePrevious = onNavigatePrevious
         context.coordinator.onNavigateNext = onNavigateNext
         context.coordinator.onSlashQueryChange = onSlashQueryChange
+        context.coordinator.blockKind = blockKind
+        textView.blockKind = blockKind
         textView.isSlashMenuPresented = isSlashMenuPresented
         textView.onSlashMoveSelection = onSlashMoveSelection
         textView.onSlashConfirmSelection = onSlashConfirmSelection
@@ -267,10 +309,38 @@ struct BlockEditorView: NSViewRepresentable {
     }
 }
 
+private func splitBlockFromTextView(_ textView: BlockNSTextView, coordinator: BlockEditorCoordinator) {
+    let loc = textView.selectedRange().location
+    let originalContent = textView.string
+    var newBefore = String(originalContent.prefix(loc))
+    let rawAfter = String(originalContent.suffix(originalContent.count - loc))
+    var newAfter = rawAfter
+    var cursorPos: Int? = nil
+
+    if let lp = listContinuationPrefix(from: newBefore) {
+        if lp.isEmpty {
+            newBefore = ""
+        } else {
+            newAfter = lp.prefix + rawAfter
+            cursorPos = lp.prefix.count
+        }
+    }
+
+    coordinator.isLoading = true
+    textView.undoManager?.disableUndoRegistration()
+    textView.string = newBefore
+    textView.undoManager?.enableUndoRegistration()
+    coordinator.isLoading = false
+    coordinator.onTextChange(newBefore)
+    coordinator.scheduleHeightUpdate(for: textView)
+    coordinator.onSplitBlock(originalContent, loc, newBefore, newAfter, cursorPos)
+}
+
 final class BlockNSTextView: NSTextView {
     private static let indentUnit = "    "
 
     var blockID: UUID = UUID()
+    var blockKind: MarkdownBlockKind = .unknown
     var onEnter: (() -> Void)?
     var onBackspaceAtStart: (() -> Void)?
     var onNavigatePrevious: ((CursorPlacement) -> Void)?
@@ -590,7 +660,7 @@ final class BlockEditorCoordinator: NSObject {
     private static let tableVisualBottomInset: CGFloat = 6
 
     private let highlighter: EditorCoordinator
-    private let blockKind: MarkdownBlockKind
+    var blockKind: MarkdownBlockKind
     private var lastReportedHeight: CGFloat = 24
     private var heightUpdatePending = false
 

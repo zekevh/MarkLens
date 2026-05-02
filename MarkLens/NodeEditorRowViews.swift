@@ -177,7 +177,7 @@ struct BlockRowView: View {
                                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
                                 }
                         }
-                        .padding(.vertical, 10)
+                        .padding(.top, 10)
                     } else {
                         editorView
                             .frame(height: max(height, 24))

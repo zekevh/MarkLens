@@ -33,6 +33,11 @@ final class MarkdownEngineTests: XCTestCase {
         XCTAssertEqual(MarkdownEngine.classifyBlockSource("> quoted"), .blockquote)
     }
 
+    func testBareHashDoesNotClassifyAsHeading() {
+        XCTAssertEqual(MarkdownEngine.classifyBlockSource("#"), .paragraph)
+        XCTAssertEqual(MarkdownEngine.classifyBlockSource("##"), .paragraph)
+    }
+
     func testResolveImageURLHandlesRelativeAndAbsoluteDestinations() {
         let fileURL = URL(fileURLWithPath: "/tmp/project/docs/note.md")
 
@@ -114,6 +119,56 @@ final class MarkdownEngineTests: XCTestCase {
         XCTAssertEqual(
             MarkdownEngine.serialize(blocks: blocks),
             SlashCommandCatalog.starterFrontMatterTemplate + "\n\nBody"
+        )
+    }
+
+    func testCompletedFrontMatterSplitsOnEnterAtEnd() {
+        let content = """
+        ---
+        title: Note
+        ---
+        """
+        let range = NSRange(location: (content as NSString).length, length: 0)
+
+        XCTAssertTrue(
+            shouldSplitStructuredBlockOnEnter(
+                kind: .frontMatter,
+                content: content,
+                selectedRange: range
+            )
+        )
+    }
+
+    func testCompletedCodeFenceSplitsOnEnterAtEnd() {
+        let content = """
+        ```python
+        import os
+        ```
+        """
+        let range = NSRange(location: (content as NSString).length, length: 0)
+
+        XCTAssertTrue(
+            shouldSplitStructuredBlockOnEnter(
+                kind: .codeFence(language: "python"),
+                content: content,
+                selectedRange: range
+            )
+        )
+    }
+
+    func testIncompleteCodeFenceDoesNotSplitOnEnterAtEnd() {
+        let content = """
+        ```python
+        import os
+        """
+        let range = NSRange(location: (content as NSString).length, length: 0)
+
+        XCTAssertFalse(
+            shouldSplitStructuredBlockOnEnter(
+                kind: .codeFence(language: "python"),
+                content: content,
+                selectedRange: range
+            )
         )
     }
 }
