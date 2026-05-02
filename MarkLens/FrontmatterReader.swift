@@ -20,11 +20,6 @@ enum FrontmatterReaderError: LocalizedError {
     }
 }
 
-enum FrontmatterReadResponse: Equatable, Sendable {
-    case single([String: FrontmatterValue]?)
-    case bulk([FrontmatterFileMatch])
-}
-
 struct FrontmatterFileMatch: Codable, Equatable, Sendable {
     let path: String
     let frontmatter: [String: FrontmatterValue]?
@@ -80,20 +75,24 @@ enum FrontmatterValue: Codable, Equatable, Sendable {
 }
 
 enum FrontmatterReader {
-    nonisolated static func readFrontmatter(at inputPath: String, relativeTo baseURL: URL?) throws -> FrontmatterReadResponse {
+    nonisolated static func readFrontmatter(at inputPath: String, relativeTo baseURL: URL?) throws -> [FrontmatterFileMatch] {
         if containsGlob(in: inputPath) {
             let matches = try resolveGlob(inputPath, relativeTo: baseURL)
-            let results = try matches.map { url in
+            return try matches.map { url in
                 FrontmatterFileMatch(
                     path: url.path,
                     frontmatter: try extractFrontmatter(fromFileAt: url)
                 )
             }
-            return .bulk(results)
         }
 
         let url = try resolveConcretePath(inputPath, relativeTo: baseURL)
-        return .single(try extractFrontmatter(fromFileAt: url))
+        return [
+            FrontmatterFileMatch(
+                path: url.path,
+                frontmatter: try extractFrontmatter(fromFileAt: url)
+            )
+        ]
     }
 
     nonisolated static func extractFrontmatter(fromFileAt url: URL) throws -> [String: FrontmatterValue]? {

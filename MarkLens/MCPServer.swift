@@ -219,25 +219,21 @@ actor MCPServer {
                 }
 
                 do {
-                    let output = try FrontmatterReader.readFrontmatter(at: path, relativeTo: baseURL)
-                    switch output {
-                    case .single(let frontmatter):
-                        let summary = frontmatter == nil
+                    let matches = try FrontmatterReader.readFrontmatter(at: path, relativeTo: baseURL)
+                    let summary: String
+                    let isGlobPath = path.contains("*") || path.contains("?") || path.contains("[")
+                    if matches.count == 1, let match = matches.first, !isGlobPath {
+                        summary = match.frontmatter == nil
                             ? "No frontmatter found in \(path)"
                             : "Read frontmatter from \(path)"
-                        return try CallTool.Result(
-                            content: [.text(text: summary, annotations: nil, _meta: nil)],
-                            structuredContent: frontmatter,
-                            isError: false
-                        )
-
-                    case .bulk(let matches):
-                        return try CallTool.Result(
-                            content: [.text(text: "Read frontmatter from \(matches.count) file(s)", annotations: nil, _meta: nil)],
-                            structuredContent: matches,
-                            isError: false
-                        )
+                    } else {
+                        summary = "Read frontmatter from \(matches.count) file(s)"
                     }
+                    return try CallTool.Result(
+                        content: [.text(text: summary, annotations: nil, _meta: nil)],
+                        structuredContent: matches,
+                        isError: false
+                    )
                 } catch {
                     return CallTool.Result(
                         content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
@@ -328,7 +324,24 @@ actor MCPServer {
                 destructiveHint: false,
                 idempotentHint: true,
                 openWorldHint: false
-            )
+            ),
+            outputSchema: .object([
+                "type": .string("array"),
+                "items": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "path": .object([
+                            "type": .string("string")
+                        ]),
+                        "frontmatter": .object([
+                            "type": .array([.string("object"), .string("null")]),
+                            "additionalProperties": .bool(true)
+                        ])
+                    ]),
+                    "required": .array([.string("path"), .string("frontmatter")]),
+                    "additionalProperties": .bool(false)
+                ])
+            ])
         ),
         Tool(
             name: "open_file",

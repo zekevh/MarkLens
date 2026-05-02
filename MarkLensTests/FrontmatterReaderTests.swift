@@ -47,7 +47,7 @@ final class FrontmatterReaderTests: XCTestCase {
         )
     }
 
-    func testReadFrontmatterSingleFileReturnsOnlyObject() throws {
+    func testReadFrontmatterSingleFileReturnsSingleMatch() throws {
         let fileURL = tempDirectoryURL.appendingPathComponent("market-cybersecurity.md")
         try """
         ---
@@ -58,15 +58,16 @@ final class FrontmatterReaderTests: XCTestCase {
         """.write(to: fileURL, atomically: true, encoding: .utf8)
 
         let result = try FrontmatterReader.readFrontmatter(at: "market-cybersecurity.md", relativeTo: tempDirectoryURL)
-        guard case .single(let frontmatter) = result else {
-            return XCTFail("Expected single frontmatter result")
-        }
-
         XCTAssertEqual(
-            frontmatter,
+            result,
             [
-                "title": .string("Market Cybersecurity"),
-                "category": .string("research")
+                FrontmatterFileMatch(
+                    path: fileURL.path,
+                    frontmatter: [
+                        "title": .string("Market Cybersecurity"),
+                        "category": .string("research")
+                    ]
+                )
             ]
         )
     }
@@ -99,12 +100,8 @@ final class FrontmatterReaderTests: XCTestCase {
         """.write(to: thirdURL, atomically: true, encoding: .utf8)
 
         let result = try FrontmatterReader.readFrontmatter(at: "*.md", relativeTo: tempDirectoryURL)
-        guard case .bulk(let matches) = result else {
-            return XCTFail("Expected bulk frontmatter result")
-        }
-
         XCTAssertEqual(
-            matches,
+            result,
             [
                 FrontmatterFileMatch(
                     path: firstURL.path,
@@ -126,10 +123,14 @@ final class FrontmatterReaderTests: XCTestCase {
         try "Body only".write(to: fileURL, atomically: true, encoding: .utf8)
 
         let result = try FrontmatterReader.readFrontmatter(at: "plain.md", relativeTo: tempDirectoryURL)
-        guard case .single(let frontmatter) = result else {
-            return XCTFail("Expected single frontmatter result")
-        }
-
-        XCTAssertNil(frontmatter)
+        XCTAssertEqual(
+            result,
+            [
+                FrontmatterFileMatch(
+                    path: fileURL.path,
+                    frontmatter: nil
+                )
+            ]
+        )
     }
 }
