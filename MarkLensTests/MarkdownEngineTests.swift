@@ -63,4 +63,17 @@ final class MarkdownEngineTests: XCTestCase {
         XCTAssertNotNil(storage.attribute(.foregroundColor, at: titleRange.location, effectiveRange: nil))
         XCTAssertNotNil(storage.attribute(.foregroundColor, at: draftValueRange.location, effectiveRange: nil))
     }
+
+    func testBlockPaddingSuppressesH1TopSpacingAfterFrontMatter() {
+        let frontMatter = MarkdownBlock(kind: .frontMatter, content: """
+        ---
+        title: Note
+        ---
+        """)
+        let heading = MarkdownBlock(kind: .heading(level: 1), content: "# Note")
+
+        XCTAssertEqual(rowPadding(for: frontMatter).top, 0)
+        XCTAssertEqual(rowPadding(for: heading, suppressHeadingTopSpacing: false).top, 40)
+        XCTAssertEqual(rowPadding(for: heading, suppressHeadingTopSpacing: true).top, 0)
+    }
 }

@@ -1,6 +1,23 @@
 import SwiftUI
 import AppKit
 
+func rowPadding(for block: MarkdownBlock, suppressHeadingTopSpacing: Bool = false) -> (top: CGFloat, bottom: CGFloat) {
+    if block.kind == .frontMatter { return (top: 0, bottom: 18) }
+
+    switch block.kind {
+    case .heading(level: 1):
+        return (top: suppressHeadingTopSpacing ? 0 : 40, bottom: 8)
+    case .heading(level: 2):
+        return (top: 32, bottom: 6)
+    case .heading(level: 3):
+        return (top: 24, bottom: 4)
+    case .heading(level: 4):
+        return (top: 20, bottom: 4)
+    default:
+        return (top: 0, bottom: 0)
+    }
+}
+
 private struct DragStrip: View {
     let blockID: UUID
     let height: CGFloat
@@ -29,6 +46,7 @@ private struct DragStrip: View {
 struct BlockRowView: View {
     @Binding var block: MarkdownBlock
     var index: Int
+    var previousBlockKind: MarkdownBlockKind?
     var searchText: String
     var fileURL: URL?
     var isDropTarget: Bool
@@ -47,13 +65,10 @@ struct BlockRowView: View {
     @State private var hasReportedInitialLayout = false
 
     private var blockPadding: (top: CGFloat, bottom: CGFloat) {
-        if block.kind == .frontMatter { return (top: 0, bottom: 18) }
-        let t = block.content.trimmingCharacters(in: .whitespaces)
-        if t.hasPrefix("# ") { return (top: 40, bottom: 8) }
-        if t.hasPrefix("## ") { return (top: 32, bottom: 6) }
-        if t.hasPrefix("### ") { return (top: 24, bottom: 4) }
-        if t.hasPrefix("####") { return (top: 20, bottom: 4) }
-        return (top: 0, bottom: 0)
+        rowPadding(
+            for: block,
+            suppressHeadingTopSpacing: index == 0 || previousBlockKind == .frontMatter
+        )
     }
 
     var body: some View {

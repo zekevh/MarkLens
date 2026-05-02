@@ -31,6 +31,7 @@ struct NodeEditorView: View {
                         BlockRowView(
                             block: $block,
                             index: index,
+                            previousBlockKind: index > 0 ? manager.blocks[index - 1].kind : nil,
                             searchText: searchText,
                             fileURL: fileURL,
                             isDropTarget: dropTargetID == block.id,
