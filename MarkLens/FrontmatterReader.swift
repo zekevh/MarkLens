@@ -95,6 +95,10 @@ enum FrontmatterReader {
         ]
     }
 
+    nonisolated static func resolveGlobPathForMCP(_ inputPath: String, relativeTo baseURL: URL?) throws -> [URL] {
+        try resolveGlob(inputPath, relativeTo: baseURL)
+    }
+
     nonisolated static func extractFrontmatter(fromFileAt url: URL) throws -> [String: FrontmatterValue]? {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw FrontmatterReaderError.fileNotFound(url.path)

@@ -83,6 +83,7 @@ struct NodeEditorView: View {
                         } isTargeted: { targeted in
                             dropTargetID = targeted ? block.id : nil
                         }
+                        .zIndex(slashMenuState?.blockID == block.id ? 1 : 0)
                     }
                 }
                 .padding(.leading, 8)

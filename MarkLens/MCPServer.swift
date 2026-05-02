@@ -241,6 +241,131 @@ actor MCPServer {
                     )
                 }
 
+            case "get_links":
+                guard let path = params.arguments?["path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+                do {
+                    let baseURL = try await self.resolveBaseURL(for: path, requestedWindowID: params.arguments?["window_id"]?.stringValue)
+                    let fileURLs = try MCPServer.resolveMarkdownTargets(from: path, relativeTo: baseURL)
+                    let workspaceURL = MCPServer.workspaceRoot(for: fileURLs, fallback: baseURL)
+                    let links = WorkspaceLinkInspector.links(inWorkspace: workspaceURL, matching: fileURLs)
+                    return try CallTool.Result(
+                        content: [.text(text: "Read links from \(links.count) file(s)", annotations: nil, _meta: nil)],
+                        structuredContent: links,
+                        isError: false
+                    )
+                } catch {
+                    return CallTool.Result(
+                        content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+            case "get_backlinks":
+                guard let path = params.arguments?["path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+                do {
+                    let workspaceURL = try await self.resolveWorkspaceURL(
+                        workspacePath: params.arguments?["workspace_path"]?.stringValue,
+                        requestedWindowID: params.arguments?["window_id"]?.stringValue
+                    )
+                    let baseURL = try await self.resolveBaseURL(for: path, requestedWindowID: params.arguments?["window_id"]?.stringValue)
+                    let targetURL = try MCPServer.resolveConcreteFilePath(path, relativeTo: baseURL ?? workspaceURL)
+                    let backlinks = WorkspaceLinkInspector.backlinks(to: targetURL, inWorkspace: workspaceURL)
+                    return try CallTool.Result(
+                        content: [.text(text: "Read \(backlinks.count) backlink(s) for \(targetURL.lastPathComponent)", annotations: nil, _meta: nil)],
+                        structuredContent: backlinks,
+                        isError: false
+                    )
+                } catch {
+                    return CallTool.Result(
+                        content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+            case "check_link_health":
+                do {
+                    let requestedPath = params.arguments?["path"]?.stringValue
+                    let requestedWindowID = params.arguments?["window_id"]?.stringValue
+                    let baseURL: URL?
+                    if let requestedPath {
+                        baseURL = try await self.resolveBaseURL(for: requestedPath, requestedWindowID: requestedWindowID)
+                    } else {
+                        baseURL = nil
+                    }
+                    let workspaceURL = try await self.resolveWorkspaceURL(
+                        workspacePath: params.arguments?["workspace_path"]?.stringValue,
+                        requestedWindowID: requestedWindowID,
+                        fallbackBaseURL: baseURL ?? nil
+                    )
+                    let targetURLs = try requestedPath.map { try MCPServer.resolveMarkdownTargets(from: $0, relativeTo: baseURL ?? workspaceURL) }
+                    let report = WorkspaceLinkInspector.health(inWorkspace: workspaceURL, matching: targetURLs)
+                    return try CallTool.Result(
+                        content: [.text(text: "Found broken links in \(report.count) file(s)", annotations: nil, _meta: nil)],
+                        structuredContent: report,
+                        isError: false
+                    )
+                } catch {
+                    return CallTool.Result(
+                        content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+            case "rewrite_links":
+                guard let moveValues = params.arguments?["moves"]?.arrayValue, !moveValues.isEmpty else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: moves", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+                do {
+                    let workspaceURL = try await self.resolveWorkspaceURL(
+                        workspacePath: params.arguments?["workspace_path"]?.stringValue,
+                        requestedWindowID: params.arguments?["window_id"]?.stringValue
+                    )
+                    let movedURLsBySource = try Dictionary(uniqueKeysWithValues: moveValues.map { moveValue in
+                        guard let move = moveValue.objectValue,
+                              let from = move["from"]?.stringValue,
+                              let to = move["to"]?.stringValue else {
+                            throw FrontmatterReaderError.invalidFrontmatter("Each move must include string fields 'from' and 'to'.")
+                        }
+                        let fromURL = try MCPServer.resolveConcreteFilePath(from, relativeTo: workspaceURL)
+                        let toURL = try MCPServer.resolveConcreteFilePath(to, relativeTo: workspaceURL)
+                        return (fromURL, toURL)
+                    })
+                    let result = WorkspaceLinkRewriter.rewriteLinks(
+                        inWorkspace: workspaceURL,
+                        movedURLsBySource: movedURLsBySource
+                    )
+                    let payload: [String: Value] = [
+                        "changed_files": .array(result.changedFiles.map { .string($0.path) }),
+                        "errors": .array(result.errors.map { .string($0) })
+                    ]
+                    return CallTool.Result(
+                        content: [.text(text: "Rewrote links in \(result.changedFiles.count) file(s)", annotations: nil, _meta: nil)],
+                        structuredContent: .object(payload),
+                        isError: false
+                    )
+                } catch {
+                    return CallTool.Result(
+                        content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
             case "new_window":
                 let path = params.arguments?["path"]?.stringValue
                 let url = path.map { URL(fileURLWithPath: $0) }
@@ -360,6 +485,105 @@ actor MCPServer {
                 ]),
                 "required": .array([.string("path")])
             ])
+        ),
+        Tool(
+            name: "get_links",
+            description: "Read outgoing inline markdown links from one markdown file or files matching a glob pattern",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path, relative path, or glob pattern such as docs/*.md")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID used to resolve relative paths")
+                    ])
+                ]),
+                "required": .array([.string("path")])
+            ]),
+            annotations: .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false)
+        ),
+        Tool(
+            name: "get_backlinks",
+            description: "Read backlinks for one markdown file by scanning markdown links in the workspace",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path or relative path to the target markdown file")
+                    ]),
+                    "workspace_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional workspace root folder path. Defaults to the requested window or active workspace")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID used to resolve relative paths and infer workspace root")
+                    ])
+                ]),
+                "required": .array([.string("path")])
+            ]),
+            annotations: .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false)
+        ),
+        Tool(
+            name: "check_link_health",
+            description: "Report broken inline markdown links for one file, a glob pattern, or an entire workspace",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional absolute path, relative path, or glob pattern to limit the health check")
+                    ]),
+                    "workspace_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional workspace root folder path. Required when no active workspace can be inferred")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID used to resolve relative paths and infer workspace root")
+                    ])
+                ])
+            ]),
+            annotations: .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false)
+        ),
+        Tool(
+            name: "rewrite_links",
+            description: "Rewrite workspace markdown links after files were moved or renamed outside MarkLens",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "moves": .object([
+                        "type": .string("array"),
+                        "items": .object([
+                            "type": .string("object"),
+                            "properties": .object([
+                                "from": .object([
+                                    "type": .string("string")
+                                ]),
+                                "to": .object([
+                                    "type": .string("string")
+                                ])
+                            ]),
+                            "required": .array([.string("from"), .string("to")]),
+                            "additionalProperties": .bool(false)
+                        ])
+                    ]),
+                    "workspace_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional workspace root folder path. Defaults to the requested window or active workspace")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID used to infer workspace root")
+                    ])
+                ]),
+                "required": .array([.string("moves")])
+            ]),
+            annotations: .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false)
         ),
         Tool(
             name: "open_folder",
@@ -578,6 +802,57 @@ actor MCPServer {
         }
     }
 
+    private func resolveBaseURL(for path: String, requestedWindowID: String?) async throws -> URL? {
+        if path.hasPrefix("/") {
+            return nil
+        }
+        if let requestedWindowID {
+            guard let window = await getWindow(requestedWindowID) else {
+                throw MCPError.invalidParams("Window not found: \(requestedWindowID)")
+            }
+            return MCPServer.baseURL(for: window)
+        }
+        let activeWindow = await listWindows().first(where: \.isActive)
+        return activeWindow.flatMap(MCPServer.baseURL(for:))
+    }
+
+    private func resolveWorkspaceURL(
+        workspacePath: String?,
+        requestedWindowID: String?,
+        fallbackBaseURL: URL? = nil
+    ) async throws -> URL {
+        if let workspacePath {
+            let url = URL(fileURLWithPath: workspacePath, isDirectory: true).standardizedFileURL
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw FrontmatterReaderError.fileNotFound(url.path)
+            }
+            return url
+        }
+        if let requestedWindowID {
+            guard let window = await getWindow(requestedWindowID) else {
+                throw MCPError.invalidParams("Window not found: \(requestedWindowID)")
+            }
+            if let rootFolderPath = window.rootFolderPath {
+                return URL(fileURLWithPath: rootFolderPath, isDirectory: true).standardizedFileURL
+            }
+            if let baseURL = MCPServer.baseURL(for: window) {
+                return baseURL.standardizedFileURL
+            }
+        }
+        if let activeWindow = await listWindows().first(where: \.isActive) {
+            if let rootFolderPath = activeWindow.rootFolderPath {
+                return URL(fileURLWithPath: rootFolderPath, isDirectory: true).standardizedFileURL
+            }
+            if let baseURL = MCPServer.baseURL(for: activeWindow) {
+                return baseURL.standardizedFileURL
+            }
+        }
+        if let fallbackBaseURL {
+            return fallbackBaseURL.standardizedFileURL
+        }
+        throw FrontmatterReaderError.relativePathRequiresBase
+    }
+
     private static func baseURL(for window: MCPWindowInfo) -> URL? {
         if let rootFolderPath = window.rootFolderPath {
             return URL(fileURLWithPath: rootFolderPath, isDirectory: true)
@@ -586,5 +861,29 @@ actor MCPServer {
             return URL(fileURLWithPath: filePath).deletingLastPathComponent()
         }
         return nil
+    }
+
+    private static func resolveMarkdownTargets(from inputPath: String, relativeTo baseURL: URL?) throws -> [URL] {
+        if inputPath.contains("*") || inputPath.contains("?") || inputPath.contains("[") {
+            return try FrontmatterReader.resolveGlobPathForMCP(inputPath, relativeTo: baseURL)
+        }
+        return [try resolveConcreteFilePath(inputPath, relativeTo: baseURL)]
+    }
+
+    private static func resolveConcreteFilePath(_ inputPath: String, relativeTo baseURL: URL?) throws -> URL {
+        if inputPath.hasPrefix("/") {
+            return URL(fileURLWithPath: inputPath).standardizedFileURL
+        }
+        guard let baseURL else {
+            throw FrontmatterReaderError.relativePathRequiresBase
+        }
+        return baseURL.appendingPathComponent(inputPath).standardizedFileURL
+    }
+
+    private static func workspaceRoot(for fileURLs: [URL], fallback: URL?) -> URL {
+        if let fallback {
+            return fallback.standardizedFileURL
+        }
+        return fileURLs.first?.deletingLastPathComponent().standardizedFileURL ?? URL(fileURLWithPath: "/")
     }
 }

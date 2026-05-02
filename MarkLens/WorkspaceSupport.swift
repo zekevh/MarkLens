@@ -614,7 +614,7 @@ struct WorkspaceLinkRewriteResult {
     let rewrittenFiles: [URL: String]
     let errors: [String]
 
-    var changedFiles: [URL] {
+    nonisolated var changedFiles: [URL] {
         rewrittenFiles.keys.sorted { $0.path < $1.path }
     }
 }
@@ -622,6 +622,34 @@ struct WorkspaceLinkRewriteResult {
 struct WorkspaceBrokenLinkReport {
     let brokenLinkCountsByFile: [URL: Int]
     let errors: [String]
+}
+
+struct WorkspaceResolvedLink: Codable, Equatable, Sendable {
+    let sourcePath: String
+    let text: String
+    let destination: String
+    let resolvedPath: String?
+    let isExternal: Bool
+    let exists: Bool
+    let line: Int
+}
+
+struct WorkspaceFileLinks: Codable, Equatable, Sendable {
+    let path: String
+    let links: [WorkspaceResolvedLink]
+}
+
+struct WorkspaceBacklinkMatch: Codable, Equatable, Sendable {
+    let targetPath: String
+    let sourcePath: String
+    let text: String
+    let destination: String
+    let line: Int
+}
+
+struct WorkspaceLinkHealthFileReport: Codable, Equatable, Sendable {
+    let path: String
+    let brokenLinks: [WorkspaceResolvedLink]
 }
 
 enum WorkspaceMarkdownSupport {
@@ -667,10 +695,119 @@ enum WorkspaceMarkdownSupport {
         }
         return ["http", "https", "mailto", "ftp"].contains(scheme)
     }
+
+    nonisolated static func resolvedPath(for destination: String, relativeTo baseURL: URL) -> URL? {
+        let pathPart = pathPart(for: destination)
+        guard !pathPart.isEmpty else { return nil }
+        return URL(fileURLWithPath: pathPart, relativeTo: baseURL).standardizedFileURL
+    }
+}
+
+enum WorkspaceLinkInspector {
+    nonisolated static func links(inFileAt fileURL: URL) throws -> [WorkspaceResolvedLink] {
+        let text = try String(contentsOf: fileURL, encoding: .utf8)
+        return links(in: text, at: fileURL)
+    }
+
+    nonisolated static func links(in text: String, at fileURL: URL) -> [WorkspaceResolvedLink] {
+        let fullRange = NSRange(location: 0, length: (text as NSString).length)
+        let sourceURL = fileURL.standardizedFileURL
+        let sourceBaseURL = sourceURL.deletingLastPathComponent()
+        let fileManager = FileManager.default
+        let nsText = text as NSString
+        var links: [WorkspaceResolvedLink] = []
+
+        WorkspaceMarkdownSupport.inlineLinkPattern.enumerateMatches(in: text, options: [], range: fullRange) { match, _, _ in
+            guard let match else { return }
+            let textRange = match.range(at: 2)
+            let destinationRange = match.range(at: 4)
+            guard textRange.location != NSNotFound,
+                  destinationRange.location != NSNotFound,
+                  let textSubstringRange = Range(textRange, in: text),
+                  let destinationSubstringRange = Range(destinationRange, in: text) else {
+                return
+            }
+
+            let linkText = String(text[textSubstringRange])
+            let destination = String(text[destinationSubstringRange])
+            let isExternal = WorkspaceMarkdownSupport.isExternalDestination(destination)
+            let resolvedURL = isExternal ? nil : WorkspaceMarkdownSupport.resolvedPath(for: destination, relativeTo: sourceBaseURL)
+            let exists = resolvedURL.map { fileManager.fileExists(atPath: $0.path) } ?? false
+            let line = nsText.substring(to: destinationRange.location).reduce(into: 1) { count, character in
+                if character == "\n" { count += 1 }
+            }
+
+            links.append(
+                WorkspaceResolvedLink(
+                    sourcePath: sourceURL.path,
+                    text: linkText,
+                    destination: destination,
+                    resolvedPath: resolvedURL?.path,
+                    isExternal: isExternal,
+                    exists: isExternal ? true : exists,
+                    line: line
+                )
+            )
+        }
+
+        return links
+    }
+
+    nonisolated static func links(
+        inWorkspace rootFolderURL: URL,
+        matching targetURLs: [URL]? = nil
+    ) -> [WorkspaceFileLinks] {
+        let fileManager = FileManager.default
+        let normalizedRoot = rootFolderURL.standardizedFileURL
+        let requested = targetURLs?.map(\.standardizedFileURL)
+        let markdownFiles = requested ?? WorkspaceMarkdownSupport.markdownFiles(in: normalizedRoot, fileManager: fileManager)
+
+        return markdownFiles.compactMap { fileURL in
+            guard WorkspaceMarkdownSupport.isDisplayableMarkdownFile(fileURL) else { return nil }
+            guard let fileLinks = try? links(inFileAt: fileURL) else { return nil }
+            return WorkspaceFileLinks(path: fileURL.path, links: fileLinks)
+        }
+    }
+
+    nonisolated static func backlinks(
+        to targetURL: URL,
+        inWorkspace rootFolderURL: URL
+    ) -> [WorkspaceBacklinkMatch] {
+        let normalizedTarget = targetURL.standardizedFileURL
+        return links(inWorkspace: rootFolderURL)
+            .flatMap(\.links)
+            .filter { $0.resolvedPath == normalizedTarget.path }
+            .map {
+                WorkspaceBacklinkMatch(
+                    targetPath: normalizedTarget.path,
+                    sourcePath: $0.sourcePath,
+                    text: $0.text,
+                    destination: $0.destination,
+                    line: $0.line
+                )
+            }
+            .sorted {
+                if $0.sourcePath == $1.sourcePath { return $0.line < $1.line }
+                return $0.sourcePath < $1.sourcePath
+            }
+    }
+
+    nonisolated static func health(
+        inWorkspace rootFolderURL: URL,
+        matching targetURLs: [URL]? = nil
+    ) -> [WorkspaceLinkHealthFileReport] {
+        links(inWorkspace: rootFolderURL, matching: targetURLs)
+            .compactMap { fileLinks in
+                let broken = fileLinks.links.filter { !$0.isExternal && !$0.exists }
+                guard !broken.isEmpty else { return nil }
+                return WorkspaceLinkHealthFileReport(path: fileLinks.path, brokenLinks: broken)
+            }
+            .sorted { $0.path < $1.path }
+    }
 }
 
 enum WorkspaceLinkRewriter {
-    static func rewriteLinks(
+    nonisolated static func rewriteLinks(
         inWorkspace rootFolderURL: URL,
         movedURLsBySource: [URL: URL],
         inMemoryContents: [URL: String] = [:]

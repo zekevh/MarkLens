@@ -398,6 +398,8 @@ private struct SlashCommandMenu: View {
             return "photo"
         case .codeBlock:
             return "chevron.left.forwardslash.chevron.right"
+        case .link:
+            return "link"
         }
     }
 }

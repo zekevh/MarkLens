@@ -21,6 +21,7 @@ enum SlashCommandID: String, CaseIterable, Identifiable {
     case table
     case image
     case codeBlock
+    case link
 
     var id: String { rawValue }
 }
@@ -61,6 +62,7 @@ enum SlashCommandCatalog {
     |  |  |
     """
     static let starterImageTemplate = "![Alt text](path/to/image.png)"
+    static let starterLinkTemplate = "[Link text](url)"
 
     static let items: [SlashCommandItem] = [
         SlashCommandItem(
@@ -135,6 +137,12 @@ enum SlashCommandCatalog {
             subtitle: "Insert a fenced code block",
             keywords: ["code", "fence", "snippet", "pre"]
         ),
+        SlashCommandItem(
+            id: .link,
+            title: "Link",
+            subtitle: "Insert a hyperlink",
+            keywords: ["link", "url", "href", "hyperlink", "anchor"]
+        ),
     ]
 
     static func item(for id: SlashCommandID) -> SlashCommandItem {
@@ -167,6 +175,8 @@ enum SlashCommandCatalog {
             return .position(("![" as NSString).length)
         case .codeBlock:
             return .position(("```\n" as NSString).length)
+        case .link:
+            return .position(("[" as NSString).length)
         }
     }
 
@@ -196,6 +206,8 @@ enum SlashCommandCatalog {
             return starterImageTemplate
         case .codeBlock:
             return starterCodeBlockTemplate
+        case .link:
+            return starterLinkTemplate
         }
     }
 
@@ -223,6 +235,8 @@ enum SlashCommandCatalog {
             return .imageBlock(ImageInfo(alt: "Alt text", destination: "path/to/image.png", title: nil))
         case .codeBlock:
             return .codeFence(language: nil)
+        case .link:
+            return .paragraph
         }
     }
 }
