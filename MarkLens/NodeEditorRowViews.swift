@@ -44,6 +44,14 @@ private struct DragStrip: View {
 }
 
 struct BlockRowView: View {
+    private static let starterFrontMatterTemplate = """
+    ---
+    title:
+    description:
+    tags: []
+    ---
+    """
+
     @Binding var block: MarkdownBlock
     var index: Int
     var previousBlockKind: MarkdownBlockKind?
@@ -199,7 +207,15 @@ struct BlockRowView: View {
         .padding(.top, index == 0 ? 0 : blockPadding.top)
         .padding(.bottom, blockPadding.bottom)
         .onAppear {
+            if shouldAutoExpandStarterFrontMatter {
+                isFrontMatterExpanded = true
+            }
             reportInitialLayoutIfNeeded()
+        }
+        .onChange(of: block.content) { _, _ in
+            if shouldAutoExpandStarterFrontMatter {
+                isFrontMatterExpanded = true
+            }
         }
         .onChange(of: isFrontMatterExpanded) { _, _ in
             reportInitialLayoutIfNeeded()
@@ -267,6 +283,17 @@ struct BlockRowView: View {
         guard !waitsForEditorMeasurement else { return }
         hasReportedInitialLayout = true
         onInitialLayout()
+    }
+
+    private var shouldAutoExpandStarterFrontMatter: Bool {
+        guard block.kind == .frontMatter else { return false }
+        let normalizedContent = block.content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedContent == Self.starterFrontMatterTemplate
     }
 }
 
