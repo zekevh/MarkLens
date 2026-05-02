@@ -193,6 +193,11 @@ private struct AppCommands: Commands {
                 .keyboardShortcut("f", modifiers: [.command, .option])
         }
         CommandGroup(after: .toolbar) {
+            Button("Go to File…") { performQuickOpen() }
+                .keyboardShortcut("p", modifiers: .command)
+
+            Divider()
+
             Button((activeState?.editorUIStore.isOutlinePanelVisible ?? false) ? "Hide Outline" : "Show Outline") {
                 activeState?.editorUIStore.isOutlinePanelVisible.toggle()
             }
@@ -516,6 +521,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeAppState?.workspaceStore.closeFolder()
     }
 
+    func performToggleOutline() {
+        activeAppState?.editorUIStore.isOutlinePanelVisible.toggle()
+    }
+
+    func performToggleSidebar() {
+        guard let state = activeAppState else { return }
+        state.sidebarVisibility = state.sidebarVisibility == .all ? .detailOnly : .all
+    }
+
+    func performEnterFullScreen() {
+        NSApp.keyWindow?.toggleFullScreen(nil)
+    }
+
+    func performFind() {
+        activeAppState?.editorUIStore.showFindBar()
+    }
+
+    func performReplace() {
+        activeAppState?.editorUIStore.showFindBar(showReplace: true)
+    }
+
+    func performTogglePathBar() {
+        activeAppState?.editorUIStore.isPathBarVisible.toggle()
+    }
+
+    func performToggleStatusBar() {
+        activeAppState?.editorUIStore.isStatusBarVisible.toggle()
+    }
+
+    func performToggleRawMode() {
+        activeAppState?.documentStore.isRawMode.toggle()
+    }
+
+    func performOpenHelp() {
+        guard let url = URL(string: "https://github.com/zekevh/MarkLens") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     @objc @MainActor private func windowDidBecomeKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         window.titlebarAppearsTransparent = true
@@ -603,6 +646,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         case ([.command, .shift], "w"):
             performCloseFolder()
+            return nil
+        case ([.command, .control], "s"):
+            performToggleSidebar()
+            return nil
+        case ([.command, .control], "f"):
+            performEnterFullScreen()
+            return nil
+        case (.command, "f"):
+            performFind()
+            return nil
+        case ([.command, .option], "f"):
+            performReplace()
+            return nil
+        case ([.command, .control], "o"):
+            performToggleOutline()
+            return nil
+        case ([.command, .option], "p"):
+            performTogglePathBar()
+            return nil
+        case (.command, "'"):
+            performToggleStatusBar()
+            return nil
+        case ([.command, .shift], "r"):
+            performToggleRawMode()
+            return nil
+        case ([.command, .shift], "/"):
+            performOpenHelp()
             return nil
         default:
             return event
