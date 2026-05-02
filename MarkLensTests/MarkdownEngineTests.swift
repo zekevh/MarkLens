@@ -76,4 +76,23 @@ final class MarkdownEngineTests: XCTestCase {
         XCTAssertEqual(rowPadding(for: heading, suppressHeadingTopSpacing: false).top, 40)
         XCTAssertEqual(rowPadding(for: heading, suppressHeadingTopSpacing: true).top, 0)
     }
+
+    func testSlashCommandCodeBlockTemplateClassifiesAsCodeFence() {
+        XCTAssertEqual(
+            MarkdownEngine.classifyBlockSource(SlashCommandCatalog.starterCodeBlockTemplate),
+            .codeFence(language: nil)
+        )
+    }
+
+    func testSerializeBlocksKeepsFrontMatterAheadOfBody() {
+        let blocks = [
+            MarkdownBlock(kind: .paragraph, content: "Body"),
+            MarkdownBlock(kind: .frontMatter, content: SlashCommandCatalog.starterFrontMatterTemplate),
+        ]
+
+        XCTAssertEqual(
+            MarkdownEngine.serialize(blocks: blocks),
+            SlashCommandCatalog.starterFrontMatterTemplate + "\n\nBody"
+        )
+    }
 }

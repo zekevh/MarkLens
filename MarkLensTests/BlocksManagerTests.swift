@@ -83,4 +83,53 @@ final class BlocksManagerTests: XCTestCase {
 
         XCTAssertEqual(synchronized, "One\n\nTwo\n\nThree")
     }
+
+    func testApplyFrontMatterSlashCommandReplacesCurrentBlock() {
+        let manager = BlocksManager()
+        let source = MarkdownBlock(content: "/fr")
+        manager.blocks = [source]
+
+        manager.applySlashCommand(.frontMatter, to: source.id)
+
+        XCTAssertEqual(manager.blocks.count, 1)
+        XCTAssertEqual(manager.blocks[0].kind, .frontMatter)
+        XCTAssertEqual(manager.blocks[0].content, SlashCommandCatalog.starterFrontMatterTemplate)
+    }
+
+    func testApplyCodeBlockSlashCommandReplacesCurrentBlock() {
+        let manager = BlocksManager()
+        let source = MarkdownBlock(content: "/co")
+        manager.blocks = [source]
+
+        manager.applySlashCommand(.codeBlock, to: source.id)
+
+        XCTAssertEqual(manager.blocks.count, 1)
+        XCTAssertEqual(manager.blocks[0].kind, .codeFence(language: nil))
+        XCTAssertEqual(manager.blocks[0].content, SlashCommandCatalog.starterCodeBlockTemplate)
+    }
+
+    func testApplyFrontMatterSlashCommandMovesBlockToTop() {
+        let manager = BlocksManager()
+        let first = MarkdownBlock(content: "Intro")
+        let second = MarkdownBlock(content: "/fr")
+        manager.blocks = [first, second]
+
+        manager.applySlashCommand(.frontMatter, to: second.id)
+
+        XCTAssertEqual(manager.blocks[0].kind, .frontMatter)
+        XCTAssertEqual(manager.blocks[0].id, second.id)
+        XCTAssertEqual(manager.blocks[1].id, first.id)
+    }
+
+    func testAvailableSlashCommandsHideFrontMatterWhenAlreadyPresent() {
+        let manager = BlocksManager()
+        let frontMatter = MarkdownBlock(kind: .frontMatter, content: SlashCommandCatalog.starterFrontMatterTemplate)
+        let empty = MarkdownBlock(content: "")
+        manager.blocks = [frontMatter, empty]
+
+        let commands = manager.availableSlashCommands(for: empty.id)
+
+        XCTAssertFalse(commands.contains(where: { $0.id == .frontMatter }))
+        XCTAssertTrue(commands.contains(where: { $0.id == .codeBlock }))
+    }
 }

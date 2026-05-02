@@ -2,6 +2,12 @@ import SwiftUI
 import Combine
 import AppKit
 
+private struct SlashMenuState: Equatable {
+    let blockID: UUID
+    var query: String
+    var selectedCommandID: SlashCommandID?
+}
+
 struct NodeEditorView: View {
     @Binding var text: String
     var searchText: String
@@ -19,6 +25,7 @@ struct NodeEditorView: View {
     @State private var pendingInitialLayoutIDs: Set<UUID> = []
     @State private var isEditorReady = false
     @State private var suppressProgrammaticSync = false
+    @State private var slashMenuState: SlashMenuState? = nil
 
     var body: some View {
         ZStack {
@@ -38,10 +45,28 @@ struct NodeEditorView: View {
                             debugBlocks: commandController.debugBlocks,
                             isBlockSelected: manager.allBlocksSelected,
                             registry: manager.registry,
+                            isSlashMenuPresented: slashMenuState?.blockID == block.id,
+                            selectedSlashCommandID: slashMenuState?.blockID == block.id ? slashMenuState?.selectedCommandID : nil,
+                            availableSlashCommands: availableSlashCommands(for: block.id),
                             onSplitBlock: { orig, loc, nb, na, cp in manager.splitBlock(id: block.id, originalContent: orig, at: loc, newBefore: nb, newAfter: na, newBlockCursorPos: cp) },
                             onMergeWithPrevious: { trailing in manager.mergeWithPrevious(block.id, trailing: trailing) },
                             onNavigatePrevious: { placement in manager.navigatePrevious(from: block.id, placement: placement) },
                             onNavigateNext: { placement in manager.navigateNext(from: block.id, placement: placement) },
+                            onSlashQueryChange: { query in
+                                handleSlashQueryChange(query, for: block.id)
+                            },
+                            onSlashMoveSelection: { offset in
+                                moveSlashSelection(by: offset)
+                            },
+                            onSlashConfirmSelection: {
+                                applySelectedSlashCommand()
+                            },
+                            onSlashSelectCommand: { commandID in
+                                applySlashCommand(commandID, to: block.id)
+                            },
+                            onSlashDismiss: {
+                                dismissSlashMenu(for: block.id)
+                            },
                             onInitialLayout: { handleInitialLayout(for: block.id) }
                         )
                         .dropDestination(for: String.self) { items, _ in
@@ -143,12 +168,18 @@ struct NodeEditorView: View {
             guard serialized != text else { return }
             text = serialized
             onTextChange(serialized)
+            reconcileSlashMenuSelection()
         }
         .onChange(of: text) { _, newText in
             let serialized = serializeMarkdownBlocks(manager.blocks)
             guard newText != serialized else { return }
             loadEditorText(newText)
             applySearchJumpIfNeeded()
+        }
+        .onChange(of: manager.blocks.map(\.id)) { _, blockIDs in
+            if let slashMenuState, !blockIDs.contains(slashMenuState.blockID) {
+                self.slashMenuState = nil
+            }
         }
         .onAppear { applySearchJumpIfNeeded() }
         .onChange(of: searchJumpRequest?.id) { _, _ in
@@ -231,5 +262,76 @@ struct NodeEditorView: View {
         if let lastBlock = manager.blocks.last {
             manager.registry.focus(lastBlock.id, at: .end, centered: centered)
         }
+    }
+
+    private func availableSlashCommands(for blockID: UUID) -> [SlashCommandItem] {
+        let query = slashMenuState?.blockID == blockID ? slashMenuState?.query ?? "" : ""
+        return filteredSlashCommands(for: blockID, query: query)
+    }
+
+    private func filteredSlashCommands(for blockID: UUID, query: String) -> [SlashCommandItem] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let commands = manager.availableSlashCommands(for: blockID)
+        guard !normalizedQuery.isEmpty else { return commands }
+
+        return commands.filter { item in
+            item.title.lowercased().contains(normalizedQuery) ||
+            item.subtitle.lowercased().contains(normalizedQuery) ||
+            item.keywords.contains(where: { $0.contains(normalizedQuery) })
+        }
+    }
+
+    private func handleSlashQueryChange(_ query: String?, for blockID: UUID) {
+        guard let query else {
+            dismissSlashMenu(for: blockID)
+            return
+        }
+
+        let filtered = filteredSlashCommands(for: blockID, query: query)
+        let preservedSelection = slashMenuState?.blockID == blockID ? slashMenuState?.selectedCommandID : nil
+        let nextSelection = filtered.contains(where: { $0.id == preservedSelection }) ? preservedSelection : filtered.first?.id
+        slashMenuState = SlashMenuState(blockID: blockID, query: query, selectedCommandID: nextSelection)
+    }
+
+    private func moveSlashSelection(by offset: Int) {
+        guard let slashMenuState else { return }
+        let commands = filteredSlashCommands(for: slashMenuState.blockID, query: slashMenuState.query)
+        guard !commands.isEmpty else { return }
+
+        let selectedIndex = slashMenuState.selectedCommandID.flatMap { selectedID in
+            commands.firstIndex(where: { $0.id == selectedID })
+        } ?? 0
+        let nextIndex = min(max(selectedIndex + offset, 0), commands.count - 1)
+        self.slashMenuState?.selectedCommandID = commands[nextIndex].id
+    }
+
+    private func applySelectedSlashCommand() {
+        guard let slashMenuState,
+              let commandID = slashMenuState.selectedCommandID else { return }
+        applySlashCommand(commandID, to: slashMenuState.blockID)
+    }
+
+    private func dismissSlashMenu(for blockID: UUID) {
+        guard slashMenuState?.blockID == blockID else { return }
+        slashMenuState = nil
+    }
+
+    private func reconcileSlashMenuSelection() {
+        guard let slashMenuState else { return }
+        let commands = filteredSlashCommands(for: slashMenuState.blockID, query: slashMenuState.query)
+        if commands.isEmpty {
+            self.slashMenuState?.selectedCommandID = nil
+            return
+        }
+        if let selected = slashMenuState.selectedCommandID,
+           commands.contains(where: { $0.id == selected }) {
+            return
+        }
+        self.slashMenuState?.selectedCommandID = commands.first?.id
+    }
+
+    private func applySlashCommand(_ commandID: SlashCommandID, to blockID: UUID) {
+        manager.applySlashCommand(commandID, to: blockID)
+        slashMenuState = nil
     }
 }

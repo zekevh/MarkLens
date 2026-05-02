@@ -8,12 +8,6 @@ struct MainEditorShell: View {
     @State private var isRichEditorReady = false
     @AppStorage("outlinePanelWidth") private var outlinePanelWidth: Double = 180
 
-    private var shouldShowFrontMatterPrompt: Bool {
-        documentStore.selectedFileURL != nil &&
-        !documentStore.isRawMode &&
-        documentStore.documentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             editorContent
@@ -91,22 +85,6 @@ struct MainEditorShell: View {
                     onLinkClick: { workspaceStore.handleLinkClick($0) }
                 )
                 .id(documentStore.selectedFileURL)
-                .overlay(alignment: .topLeading) {
-                    if shouldShowFrontMatterPrompt {
-                        FrontMatterPromptCard {
-                            let template = """
-                            ---
-                            title: 
-                            description: 
-                            tags: []
-                            ---
-                            """
-                            documentStore.saveCurrentFile(text: template)
-                        }
-                        .padding(.leading, 48)
-                        .padding(.top, 18)
-                    }
-                }
             }
         } else {
             EmptyEditorView()
@@ -149,36 +127,5 @@ private struct OutlineDivider: View {
 
     private func clamp(_ value: Double) -> Double {
         max(minWidth, min(value, maxWidth))
-    }
-}
-
-private struct FrontMatterPromptCard: View {
-    var onInsert: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Start with front matter")
-                    .font(.subheadline.weight(.semibold))
-                Text("Insert `title`, `description`, and `tags`.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
-
-            Button("Insert Front Matter", action: onInsert)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.05), radius: 10, y: 4)
-        .frame(maxWidth: 420)
     }
 }

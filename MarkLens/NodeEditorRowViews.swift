@@ -44,14 +44,6 @@ private struct DragStrip: View {
 }
 
 struct BlockRowView: View {
-    private static let starterFrontMatterTemplate = """
-    ---
-    title:
-    description:
-    tags: []
-    ---
-    """
-
     @Binding var block: MarkdownBlock
     var index: Int
     var previousBlockKind: MarkdownBlockKind?
@@ -61,10 +53,18 @@ struct BlockRowView: View {
     var debugBlocks: Bool
     var isBlockSelected: Bool
     var registry: BlockRegistry
+    var isSlashMenuPresented: Bool
+    var selectedSlashCommandID: SlashCommandID?
+    var availableSlashCommands: [SlashCommandItem]
     var onSplitBlock: (String, Int, String?, String?, Int?) -> Void
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
+    var onSlashQueryChange: (String?) -> Void
+    var onSlashMoveSelection: (Int) -> Void
+    var onSlashConfirmSelection: () -> Void
+    var onSlashSelectCommand: (SlashCommandID) -> Void
+    var onSlashDismiss: () -> Void
     var onInitialLayout: () -> Void
 
     @State private var height: CGFloat = 32
@@ -181,6 +181,16 @@ struct BlockRowView: View {
                     } else {
                         editorView
                             .frame(height: max(height, 24))
+                            .overlay(alignment: .topLeading) {
+                                if isSlashMenuPresented {
+                                    SlashCommandMenu(
+                                        commands: availableSlashCommands,
+                                        selectedCommandID: selectedSlashCommandID,
+                                        onSelect: onSlashSelectCommand
+                                    )
+                                    .padding(.top, 30)
+                                }
+                            }
                     }
                 }
             }
@@ -232,6 +242,7 @@ struct BlockRowView: View {
             content: $block.content,
             searchText: searchText,
             registry: registry,
+            isSlashMenuPresented: isSlashMenuPresented,
             onHeightChange: { h in
                 height = h
                 guard !hasReportedInitialLayout else { return }
@@ -241,7 +252,11 @@ struct BlockRowView: View {
             onSplitBlock: onSplitBlock,
             onMergeWithPrevious: onMergeWithPrevious,
             onNavigatePrevious: onNavigatePrevious,
-            onNavigateNext: onNavigateNext
+            onNavigateNext: onNavigateNext,
+            onSlashQueryChange: onSlashQueryChange,
+            onSlashMoveSelection: onSlashMoveSelection,
+            onSlashConfirmSelection: onSlashConfirmSelection,
+            onSlashDismiss: onSlashDismiss
         )
     }
 
@@ -293,7 +308,81 @@ struct BlockRowView: View {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalizedContent == Self.starterFrontMatterTemplate
+        return normalizedContent == SlashCommandCatalog.starterFrontMatterTemplate
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private struct SlashCommandMenu: View {
+    let commands: [SlashCommandItem]
+    let selectedCommandID: SlashCommandID?
+    let onSelect: (SlashCommandID) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if commands.isEmpty {
+                Text("No matching blocks")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(commands) { command in
+                    Button(action: { onSelect(command.id) }) {
+                        HStack(alignment: .center, spacing: 10) {
+                            Image(systemName: iconName(for: command.id))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 18, height: 18)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(command.title)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Text(command.subtitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(isSelected(command.id) ? Color.accentColor.opacity(0.12) : .clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(6)
+        .frame(width: 320, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.08), radius: 14, y: 8)
+    }
+
+    private func isSelected(_ commandID: SlashCommandID) -> Bool {
+        selectedCommandID == commandID
+    }
+
+    private func iconName(for commandID: SlashCommandID) -> String {
+        switch commandID {
+        case .frontMatter:
+            return "doc.text"
+        case .codeBlock:
+            return "chevron.left.forwardslash.chevron.right"
+        }
     }
 }
 

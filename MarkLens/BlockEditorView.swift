@@ -63,11 +63,16 @@ struct BlockEditorView: NSViewRepresentable {
     @Binding var content: String
     var searchText: String
     var registry: BlockRegistry
+    var isSlashMenuPresented: Bool = false
     var onHeightChange: (CGFloat) -> Void
     var onSplitBlock: (String, Int, String?, String?, Int?) -> Void
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
+    var onSlashQueryChange: (String?) -> Void = { _ in }
+    var onSlashMoveSelection: (Int) -> Void = { _ in }
+    var onSlashConfirmSelection: () -> Void = {}
+    var onSlashDismiss: () -> Void = {}
 
     func makeNSView(context: Context) -> NSScrollView {
         let storage = NSTextStorage()
@@ -79,6 +84,10 @@ struct BlockEditorView: NSViewRepresentable {
         let textView = BlockNSTextView(frame: .zero, textContainer: container)
         textView.blockID = blockID
         textView.registry = registry
+        textView.isSlashMenuPresented = isSlashMenuPresented
+        textView.onSlashMoveSelection = onSlashMoveSelection
+        textView.onSlashConfirmSelection = onSlashConfirmSelection
+        textView.onSlashDismiss = onSlashDismiss
         configureTextView(textView)
         configureTextContainer(container, for: textView)
         textView.delegate = context.coordinator
@@ -172,7 +181,7 @@ struct BlockEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let textView = scroll.documentView as? NSTextView else { return }
+        guard let textView = scroll.documentView as? BlockNSTextView else { return }
 
         context.coordinator.onTextChange = { [self] t in content = t }
         context.coordinator.onHeightChange = onHeightChange
@@ -180,6 +189,11 @@ struct BlockEditorView: NSViewRepresentable {
         context.coordinator.onMergeWithPrevious = onMergeWithPrevious
         context.coordinator.onNavigatePrevious = onNavigatePrevious
         context.coordinator.onNavigateNext = onNavigateNext
+        context.coordinator.onSlashQueryChange = onSlashQueryChange
+        textView.isSlashMenuPresented = isSlashMenuPresented
+        textView.onSlashMoveSelection = onSlashMoveSelection
+        textView.onSlashConfirmSelection = onSlashConfirmSelection
+        textView.onSlashDismiss = onSlashDismiss
 
         if textView.string != content {
             context.coordinator.isLoading = true
@@ -261,7 +275,11 @@ final class BlockNSTextView: NSTextView {
     var onBackspaceAtStart: (() -> Void)?
     var onNavigatePrevious: ((CursorPlacement) -> Void)?
     var onNavigateNext: ((CursorPlacement) -> Void)?
+    var onSlashMoveSelection: ((Int) -> Void)?
+    var onSlashConfirmSelection: (() -> Void)?
+    var onSlashDismiss: (() -> Void)?
     weak var registry: BlockRegistry?
+    var isSlashMenuPresented = false
 
     var crossBlockSelectionRange: NSRange? {
         didSet { needsDisplay = true }
@@ -393,7 +411,14 @@ final class BlockNSTextView: NSTextView {
         case 48 where !isOpt && !isCmd && !isCtrl:
             if isShift { outdentSelection() } else { indentSelection() }
             return
+        case 53 where isSlashMenuPresented && !modified:
+            onSlashDismiss?()
+            return
         case 36 where !isShift:
+            if isSlashMenuPresented {
+                onSlashConfirmSelection?()
+                return
+            }
             onEnter?()
             return
         case 51:
@@ -428,11 +453,19 @@ final class BlockNSTextView: NSTextView {
                 return
             }
         case 126 where !modified:
+            if isSlashMenuPresented {
+                onSlashMoveSelection?(-1)
+                return
+            }
             if isOnFirstLine() {
                 onNavigatePrevious?(.end)
                 return
             }
         case 125 where !modified:
+            if isSlashMenuPresented {
+                onSlashMoveSelection?(1)
+                return
+            }
             if isOnLastLine() {
                 onNavigateNext?(.start)
                 return
@@ -567,6 +600,7 @@ final class BlockEditorCoordinator: NSObject {
     var onMergeWithPrevious: (String) -> Void
     var onNavigatePrevious: (CursorPlacement) -> Void
     var onNavigateNext: (CursorPlacement) -> Void
+    var onSlashQueryChange: (String?) -> Void = { _ in }
     var isLoading = false
 
     init(
@@ -751,11 +785,22 @@ extension BlockEditorCoordinator: NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard !isLoading, let tv = notification.object as? NSTextView else { return }
         onTextChange(tv.string)
+        onSlashQueryChange(Self.slashQuery(in: tv.string))
         tv.typingAttributes = Styles.baseAttributes
         Task { [weak self, weak tv] in
             guard let self, let tv else { return }
             self.scheduleHeightUpdate(for: tv)
             scrollCursorToVisible(in: tv)
         }
+    }
+
+    private static func slashQuery(in text: String) -> String? {
+        guard !text.contains("\n"),
+              text.hasPrefix("/"),
+              !text.dropFirst().contains(where: { $0.isWhitespace }) else {
+            return nil
+        }
+
+        return String(text.dropFirst())
     }
 }

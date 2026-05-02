@@ -8,6 +8,73 @@ enum CursorPlacement {
     case position(Int)
 }
 
+enum SlashCommandID: String, CaseIterable, Identifiable {
+    case frontMatter
+    case codeBlock
+
+    var id: String { rawValue }
+}
+
+struct SlashCommandItem: Identifiable, Equatable {
+    let id: SlashCommandID
+    let title: String
+    let subtitle: String
+    let keywords: [String]
+}
+
+enum SlashCommandCatalog {
+    static let starterFrontMatterTemplate = """
+    ---
+    title: 
+    description: 
+    tags: []
+    ---
+    """
+
+    static let starterCodeBlockTemplate = """
+    ```
+
+    ```
+    """
+
+    static let items: [SlashCommandItem] = [
+        SlashCommandItem(
+            id: .frontMatter,
+            title: "Front Matter",
+            subtitle: "Insert title, description, and tags",
+            keywords: ["yaml", "meta", "metadata", "frontmatter"]
+        ),
+        SlashCommandItem(
+            id: .codeBlock,
+            title: "Code Block",
+            subtitle: "Insert a fenced code block",
+            keywords: ["code", "fence", "snippet", "pre"]
+        ),
+    ]
+
+    static func item(for id: SlashCommandID) -> SlashCommandItem {
+        items.first(where: { $0.id == id })!
+    }
+
+    static func cursorPlacement(for id: SlashCommandID) -> CursorPlacement {
+        switch id {
+        case .frontMatter:
+            return .position(("---\ntitle: " as NSString).length)
+        case .codeBlock:
+            return .position(("```\n" as NSString).length)
+        }
+    }
+
+    static func template(for id: SlashCommandID) -> String {
+        switch id {
+        case .frontMatter:
+            return starterFrontMatterTemplate
+        case .codeBlock:
+            return starterCodeBlockTemplate
+        }
+    }
+}
+
 @MainActor
 final class BlockRegistry: ObservableObject {
     private final class WeakRef { weak var value: NSTextView? }
@@ -202,6 +269,46 @@ final class BlocksManager: ObservableObject {
         um?.setActionName("Move Block")
 
         blocks.move(fromOffsets: IndexSet(integer: from), toOffset: to)
+    }
+
+    func availableSlashCommands(for sourceID: UUID) -> [SlashCommandItem] {
+        let hasOtherFrontMatter = blocks.contains { block in
+            block.kind == .frontMatter && block.id != sourceID
+        }
+
+        return SlashCommandCatalog.items.filter { item in
+            item.id != .frontMatter || !hasOtherFrontMatter
+        }
+    }
+
+    func applySlashCommand(_ commandID: SlashCommandID, to sourceID: UUID) {
+        guard let sourceIndex = blocks.firstIndex(where: { $0.id == sourceID }) else { return }
+
+        let originalBlocks = blocks
+        let originalFocusID = sourceID
+        let replacement = MarkdownBlock(
+            id: sourceID,
+            kind: commandID == .frontMatter ? .frontMatter : .codeFence(language: nil),
+            content: SlashCommandCatalog.template(for: commandID)
+        )
+        let desiredFocus = SlashCommandCatalog.cursorPlacement(for: commandID)
+
+        undoManager?.registerUndo(withTarget: self) { mgr in
+            MainActor.assumeIsolated {
+                mgr.blocks = originalBlocks
+                mgr.registry.focus(originalFocusID, at: .start)
+            }
+        }
+        undoManager?.setActionName("Insert Block Template")
+
+        blocks[sourceIndex] = replacement
+
+        if commandID == .frontMatter, sourceIndex != 0 {
+            let block = blocks.remove(at: sourceIndex)
+            blocks.insert(block, at: 0)
+        }
+
+        registry.focus(sourceID, at: desiredFocus)
     }
 
     func indentBlocks(ids: Set<UUID>, outdent: Bool) {
