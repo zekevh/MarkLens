@@ -311,6 +311,40 @@ final class WorkspaceStore: ObservableObject {
         handleMovedFiles(movedURLsBySource)
     }
 
+    func moveFile(from sourceURL: URL, to destinationURL: URL) {
+        let normalizedSourceURL = sourceURL.standardizedFileURL
+        let normalizedDestinationURL = destinationURL.standardizedFileURL
+        guard normalizedSourceURL != normalizedDestinationURL else { return }
+
+        guard FileManager.default.fileExists(atPath: normalizedSourceURL.path) else {
+            documentStore.errorMessage = FrontmatterReaderError.fileNotFound(normalizedSourceURL.path).localizedDescription
+            return
+        }
+
+        let destinationFolderURL = normalizedDestinationURL.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: destinationFolderURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            documentStore.errorMessage = "Folder not found: \(destinationFolderURL.path)"
+            return
+        }
+
+        guard !FileManager.default.fileExists(atPath: normalizedDestinationURL.path) else {
+            documentStore.errorMessage = "\"\(normalizedDestinationURL.lastPathComponent)\" already exists."
+            return
+        }
+
+        do {
+            _ = try fileOperations.moveItem(at: normalizedSourceURL, to: normalizedDestinationURL)
+        } catch {
+            present(error, context: "Could not move \"\(normalizedSourceURL.lastPathComponent)\"")
+            return
+        }
+
+        rewriteLinksIfNeeded(for: [normalizedSourceURL: normalizedDestinationURL])
+        handleRelocatedFiles([normalizedSourceURL: normalizedDestinationURL])
+    }
+
     func openExternalFile(_ url: URL) {
         guard !url.hasDirectoryPath else { return }
         if let gitRoot = findGitRoot(for: url) {
@@ -496,33 +530,25 @@ final class WorkspaceStore: ObservableObject {
     }
 
     private func handleRenamedFile(from oldURL: URL, to newURL: URL) {
-        syncPinnedURLs([oldURL: newURL])
-        syncRecentDocuments([oldURL: newURL])
-
-        if rootFolderURL != nil {
-            rebuildTree()
-        } else {
-            rootNodes = rootNodes.map { node in
-                node.url == oldURL
-                    ? FileNode(url: newURL, name: newURL.lastPathComponent, isDirectory: false)
-                    : node
-            }
-        }
-
-        selectedSidebarURLs = remappedSelection(selectedSidebarURLs, with: [oldURL: newURL])
-
-        if documentStore.selectedFileURL == oldURL {
-            loadFile(newURL)
-        }
+        handleRelocatedFiles([oldURL: newURL])
     }
 
     private func handleMovedFiles(_ movedURLsBySource: [URL: URL]) {
+        handleRelocatedFiles(movedURLsBySource)
+    }
+
+    private func handleRelocatedFiles(_ movedURLsBySource: [URL: URL]) {
         syncPinnedURLs(movedURLsBySource)
         syncRecentDocuments(movedURLsBySource)
         selectedSidebarURLs = remappedSelection(selectedSidebarURLs, with: movedURLsBySource)
 
         if rootFolderURL != nil {
             rebuildTree()
+        } else {
+            rootNodes = rootNodes.map { node in
+                guard let relocatedURL = movedURLsBySource[node.url] else { return node }
+                return FileNode(url: relocatedURL, name: relocatedURL.lastPathComponent, isDirectory: false)
+            }
         }
 
         if let selectedFileURL = documentStore.selectedFileURL,

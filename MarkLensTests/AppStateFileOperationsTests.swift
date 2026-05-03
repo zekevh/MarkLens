@@ -78,6 +78,20 @@ final class AppStateFileOperationsTests: XCTestCase {
         XCTAssertEqual(sourceContents, "[go](./Renamed.md)\n")
     }
 
+    func testGenericMoveFileSupportsSameFolderRename() throws {
+        let sourceURL = tempDirectoryURL.appendingPathComponent("Source.md")
+        let targetURL = tempDirectoryURL.appendingPathComponent("Target.md")
+        let renamedURL = tempDirectoryURL.appendingPathComponent("Renamed.md")
+        try "[go](./Target.md)\n".write(to: sourceURL, atomically: true, encoding: .utf8)
+        try "target\n".write(to: targetURL, atomically: true, encoding: .utf8)
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+
+        appState.workspaceStore.moveFile(from: targetURL, to: renamedURL)
+
+        let sourceContents = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertEqual(sourceContents, "[go](./Renamed.md)\n")
+    }
+
     func testMoveNodeRewritesInboundAndOutboundWorkspaceLinks() throws {
         let folderURL = tempDirectoryURL.appendingPathComponent("Docs", isDirectory: true)
         let destinationURL = tempDirectoryURL.appendingPathComponent("Archive", isDirectory: true)
@@ -100,6 +114,31 @@ final class AppStateFileOperationsTests: XCTestCase {
         let movedContents = try String(contentsOf: relocatedURL, encoding: .utf8)
 
         XCTAssertEqual(siblingContents, "[moved](./Archive/Moved.md#section)\n")
+        XCTAssertEqual(movedContents, "[inside](../Docs/Reference.md)\n")
+    }
+
+    func testGenericMoveFileSupportsMoveAndRenameTogether() throws {
+        let folderURL = tempDirectoryURL.appendingPathComponent("Docs", isDirectory: true)
+        let destinationURL = tempDirectoryURL.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+
+        let movedFileURL = folderURL.appendingPathComponent("Moved.md")
+        let siblingURL = tempDirectoryURL.appendingPathComponent("Sibling.md")
+        let referenceURL = folderURL.appendingPathComponent("Reference.md")
+        let relocatedURL = destinationURL.appendingPathComponent("Renamed.md")
+
+        try "[inside](./Reference.md)\n".write(to: movedFileURL, atomically: true, encoding: .utf8)
+        try "reference\n".write(to: referenceURL, atomically: true, encoding: .utf8)
+        try "[moved](./Docs/Moved.md#section)\n".write(to: siblingURL, atomically: true, encoding: .utf8)
+
+        appState.workspaceStore.rootFolderURL = tempDirectoryURL
+        appState.workspaceStore.moveFile(from: movedFileURL, to: relocatedURL)
+
+        let siblingContents = try String(contentsOf: siblingURL, encoding: .utf8)
+        let movedContents = try String(contentsOf: relocatedURL, encoding: .utf8)
+
+        XCTAssertEqual(siblingContents, "[moved](./Archive/Renamed.md#section)\n")
         XCTAssertEqual(movedContents, "[inside](../Docs/Reference.md)\n")
     }
 

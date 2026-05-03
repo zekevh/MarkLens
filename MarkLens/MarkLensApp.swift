@@ -404,6 +404,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 return window
             },
+            moveFile: { @MainActor [weak self] sourceURL, destinationURL, windowID in
+                guard let self else { return "No active MarkLens window is available" }
+                let (targetState, targetWindow) = self.resolveTargetWindow(windowID: windowID)
+                guard let state = targetState else {
+                    return windowID.map { "Window not found: \($0)" } ?? "No active MarkLens window is available"
+                }
+                state.documentStore.errorMessage = nil
+                state.workspaceStore.moveFile(from: sourceURL, to: destinationURL)
+                if let targetWindow {
+                    self.restoreFocus(for: targetWindow)
+                }
+                NSApp.activate(ignoringOtherApps: true)
+                return state.documentStore.errorMessage
+            },
             newWindow: { @MainActor [weak self] url in
                 await self?.createWindow(opening: url)
             },

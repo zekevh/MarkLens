@@ -101,6 +101,11 @@ final class WorkspaceFileOperations {
         return targetURL
     }
 
+    func moveItem(at sourceURL: URL, to destinationURL: URL) throws -> URL {
+        try fileManager.moveItem(at: sourceURL, to: destinationURL)
+        return destinationURL
+    }
+
     private func normalizedMarkdownFileName(_ fileName: String) -> String {
         let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedName.lowercased().hasSuffix(".md") ? trimmedName : "\(trimmedName).md"

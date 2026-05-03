@@ -44,6 +44,7 @@ actor MCPServer {
     private let getWindow: @Sendable (String) async -> MCPWindowInfo?
     private let openFolder: @Sendable (URL, String?) async -> MCPWindowInfo?
     private let openFile: @Sendable (URL, String?) async -> MCPWindowInfo?
+    private let moveFile: @Sendable (URL, URL, String?) async -> String?
     private let newWindow: @Sendable (URL?) async -> MCPWindowInfo?
     private let setActiveWindow: @Sendable (String) async -> MCPWindowInfo?
     private let closeWindow: @Sendable (String) async -> Bool
@@ -53,6 +54,7 @@ actor MCPServer {
         getWindow: @escaping @Sendable (String) async -> MCPWindowInfo?,
         openFolder: @escaping @Sendable (URL, String?) async -> MCPWindowInfo?,
         openFile: @escaping @Sendable (URL, String?) async -> MCPWindowInfo?,
+        moveFile: @escaping @Sendable (URL, URL, String?) async -> String?,
         newWindow: @escaping @Sendable (URL?) async -> MCPWindowInfo?,
         setActiveWindow: @escaping @Sendable (String) async -> MCPWindowInfo?,
         closeWindow: @escaping @Sendable (String) async -> Bool
@@ -61,6 +63,7 @@ actor MCPServer {
         self.getWindow = getWindow
         self.openFolder = openFolder
         self.openFile = openFile
+        self.moveFile = moveFile
         self.newWindow = newWindow
         self.setActiveWindow = setActiveWindow
         self.closeWindow = closeWindow
@@ -103,6 +106,7 @@ actor MCPServer {
         let getWindow = getWindow
         let openFolder = openFolder
         let openFile = openFile
+        let moveFile = moveFile
         let newWindow = newWindow
         let setActiveWindow = setActiveWindow
         let closeWindow = closeWindow
@@ -192,6 +196,50 @@ actor MCPServer {
                         _meta: nil
                     )]
                 )
+
+            case "move_file":
+                guard let fromPath = params.arguments?["from_path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: from_path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+                guard let toPath = params.arguments?["to_path"]?.stringValue else {
+                    return CallTool.Result(
+                        content: [.text(text: "Missing required parameter: to_path", annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
+
+                do {
+                    let requestedWindowID = params.arguments?["window_id"]?.stringValue
+                    let fromBaseURL = try await self.resolveBaseURL(for: fromPath, requestedWindowID: requestedWindowID)
+                    let toBaseURL = try await self.resolveBaseURL(for: toPath, requestedWindowID: requestedWindowID)
+                    let sourceURL = try MCPServer.resolveConcreteFilePath(fromPath, relativeTo: fromBaseURL)
+                    let destinationURL = try MCPServer.resolveConcreteFilePath(toPath, relativeTo: toBaseURL)
+
+                    if let errorMessage = await moveFile(sourceURL, destinationURL, requestedWindowID) {
+                        return CallTool.Result(
+                            content: [.text(text: errorMessage, annotations: nil, _meta: nil)],
+                            isError: true
+                        )
+                    }
+
+                    let payload: [String: Value] = [
+                        "from_path": .string(sourceURL.path),
+                        "to_path": .string(destinationURL.path)
+                    ]
+                    return CallTool.Result(
+                        content: [.text(text: "Moved \(sourceURL.lastPathComponent) to \(destinationURL.path)", annotations: nil, _meta: nil)],
+                        structuredContent: .object(payload),
+                        isError: false
+                    )
+                } catch {
+                    return CallTool.Result(
+                        content: [.text(text: error.localizedDescription, annotations: nil, _meta: nil)],
+                        isError: true
+                    )
+                }
 
             case "read_frontmatter":
                 guard let path = params.arguments?["path"]?.stringValue else {
@@ -602,6 +650,29 @@ actor MCPServer {
                 ]),
                 "required": .array([.string("path")])
             ])
+        ),
+        Tool(
+            name: "move_file",
+            description: "Move or rename one markdown file through MarkLens, updating workspace links to match",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "from_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path or relative path to the existing markdown file")
+                    ]),
+                    "to_path": .object([
+                        "type": .string("string"),
+                        "description": .string("Absolute path or relative path for the destination file path")
+                    ]),
+                    "window_id": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional editor window ID used to resolve relative paths")
+                    ])
+                ]),
+                "required": .array([.string("from_path"), .string("to_path")])
+            ]),
+            annotations: .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false)
         ),
         Tool(
             name: "new_window",
